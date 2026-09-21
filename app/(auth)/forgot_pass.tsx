@@ -2,18 +2,19 @@ import { useState, useRef, useEffect } from "react";
 import { View, Text, TextInput, Image, TouchableOpacity, Modal, NativeSyntheticEvent, TextInputKeyPressEventData } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Icons } from "../../constants/icons";
-import { router } from "expo-router";
-import { empty_field, email_regex, otp_regex } from "../lib/auth";
-import { sendPasswordResetOtp, verifyRecoveryOtp } from "../services/auth";
+import { router } from "expo-router/build/exports";
+import { empty_field, email_regex, otp_regex } from ".././lib/auth";
+import { supabase } from ".././lib/supabase";
+import { recoveryPassword } from ".././services/otp";
 
 const ForgotPassword = () => {
         const [email, setEmail] = useState("");
         const [otpErrorMsg, setOtpErrorMsg] = useState<string | null>(null);
+
         const [errorMsg, setErrorMsg] = useState<string | null>(null);
-        const [isLoading, setIsLoading] = useState(false);
 
         const [recoverySuccess, setRecoverySuccess] = useState(false);
-        const [Recoverymsg, setRecoverymsg] = useState<string | null>(null);
+        const [Recoverymsg,setRecoverymsg] = useState<string | null>(null);
 
         const emailError = (email: string) => email_regex(email);
         const emptyFieldError = (value: string) => empty_field(value);
@@ -22,7 +23,7 @@ const ForgotPassword = () => {
         const [otp, setOtp] = useState(["", "", "", "", "", ""]);
         const inputRefs = useRef<Array<TextInput | null>>([]);
 
-        const MAX_ATTEMPTS = 3;
+        const MAX_ATTEMPTS =3;
 
         const RESEND_ATTEMPTS = 2;
 
@@ -124,17 +125,12 @@ const ForgotPassword = () => {
                         return;
                 }
 
-                setIsLoading(true);
-                setOtpErrorMsg(null);
                 try {
-                        const res = await sendPasswordResetOtp(email.trim());
-                        setRecoverymsg(res.message || "OTP has been successfully sent to your email");
+                        await recoveryPassword(email.trim());
+                        setRecoverymsg("OTP has been successfully sent to your email");
                         setAttempts((currentAttempts) => currentAttempts + 1);
-                } catch (err: unknown) {
-                        const message = err instanceof Error ? err.message : "Failed to resend OTP. Please try again later.";
-                        setOtpErrorMsg(message);
-                } finally {
-                        setIsLoading(false);
+                } catch (err) {
+                        setOtpErrorMsg("Failed to resend OTP. Please try again later.");
                 }
         };
 
@@ -146,36 +142,37 @@ const ForgotPassword = () => {
                 }
 
                 if (isLocked) {
+
                         setOtpErrorMsg("Maximum attempts reached. Wait for 3 minutes");
                         return;
                 }
 
-                setIsLoading(true);
-                setOtpErrorMsg(null);
+                const otpCode = otp.join("");
+                const { error } = await supabase.auth.verifyOtp({
+                        email: email.trim(),
+                        token: otpCode,
+                        type: "recovery",
+                });
 
-                try {
-                        const otpCode = otp.join("");
-                        await verifyRecoveryOtp(email.trim(), otpCode);
-                        setAttempts(0);
-                        setOtpErrorMsg(null);
-                        setShowModal(false);
-                        router.replace("/(auth)/new_pass");
-                } catch (err: unknown) {
+                if (error) {
                         const nextAttempts = attempts + 1;
                         setAttempts(nextAttempts);
 
                         if (nextAttempts >= MAX_ATTEMPTS) {
+
                                 setIsLocked(true);
                                 setLockUntil(Date.now() + LOCK_DURATION);
                                 setOtpErrorMsg("Maximum attempts reached. Wait for 3 minutes");
                                 return;
                         }
 
-                        const message = err instanceof Error ? err.message : `Incorrect or expired code. ${MAX_ATTEMPTS - nextAttempts} attempt(s) left.`;
-                        setOtpErrorMsg(message);
-                } finally {
-                        setIsLoading(false);
+                        setOtpErrorMsg(`Incorrect or expired code. ${MAX_ATTEMPTS - nextAttempts} attempt(s) left.`);
+                        return;
                 }
+
+                setAttempts(0);
+                setOtpErrorMsg(null);
+                router.replace("/(auth)/new_pass");
         };
 
         const handleSubmit = async () => {
@@ -186,51 +183,45 @@ const ForgotPassword = () => {
                         return;
                 }
 
-                setIsLoading(true);
-                setErrorMsg(null);
-
                 try {
-                        const res = await sendPasswordResetOtp(email.trim());
+                        await recoveryPassword(email.trim());
                         setErrorMsg(null);
-                        setRecoverymsg(res.message || "OTP has been successfully sent to your email");
+                        setRecoverymsg("OTP has been successfully sent to your email");
                         setShowModal(true);
-                } catch (err: unknown) {
-                        const message = err instanceof Error ? err.message : "Failed to send recovery code. Please try again later.";
-                        setErrorMsg(message);
-                } finally {
-                        setIsLoading(false);
+                } catch {
+                        setErrorMsg("Failed to send recovery code. Please try again later.");
                 }
         };
 
-
+       
         return (
-                <SafeAreaView className="auth-screen forgot-password-screen">
-
+                 <SafeAreaView className="auth-screen forgot-password-screen">
+                        
                         <View className="auth-content">
 
 
 
-                                <View className="forgot-password-page-container">
+                        <View className="forgot-password-page-container">
 
-                                        <Text className="forgot-password-title">
-                                                Did you forget password?
+                                <Text className="forgot-password-title">
+                                        Did you forget password?
+                                </Text>
+
+                                <View className="forgot-password-subtext-container">
+
+                                        <Text className="forgot-password-subtext">
+                                                Enter your email to receive a verification code with 6 digits.
                                         </Text>
-
-                                        <View className="forgot-password-subtext-container">
-
-                                                <Text className="forgot-password-subtext">
-                                                        Enter your email to receive a verification code with 6 digits.
-                                                </Text>
-                                        </View>
                                 </View>
+                        </View>
 
-                                <View className="arrow-back">
+                        <View className="arrow-back">
 
-                                        <TouchableOpacity onPress={() => router.back()}>
-                                                <Image className="arrow-icon" source={Icons.arrowBack} />
+                                <TouchableOpacity onPress={() => router.back()}>
+                                <Image className="arrow-icon" source={Icons.arrowBack} />
 
-                                        </TouchableOpacity>
-                                </View>
+                                </TouchableOpacity>
+                        </View>
 
                                 <View className="forgot-password-action-container">
 
@@ -252,30 +243,30 @@ const ForgotPassword = () => {
                                         <Image className="email-icon" source={Icons.emailIcon} />
                                 </View>
 
-                                {Recoverymsg && (
-                                        <Text className="success-text">
-                                                {Recoverymsg}
-                                        </Text>
-                                )}
+                                 {Recoverymsg && (
+                                         <Text className="success-text">
+                                                 {Recoverymsg}
+                                         </Text>
+                                 )}
 
-                                {errorMsg && (
-                                        <Text className="error-text">
-                                                {errorMsg}
-                                        </Text>
-                                )}
+                                 {errorMsg && (
+                                         <Text className="error-text">
+                                                 {errorMsg}
+                                         </Text>
+                                 )}
 
-
+                            
 
 
                                 <View className="forgot-password-submit-container">
+                                        
+                                        <TouchableOpacity className="forgot-password-submit-button" onPress={handleSubmit}>
 
-                                        <TouchableOpacity
-                                                className="forgot-password-submit-button"
-                                                onPress={handleSubmit}
-                                                disabled={isLoading}
-                                        >
+
                                                 <Text className="forgot-password-submit-button-text">
-                                                        {isLoading ? "Submitting..." : "Submit"}
+                                                
+                                                        Submit
+
                                                 </Text>
                                         </TouchableOpacity>
 
@@ -300,9 +291,9 @@ const ForgotPassword = () => {
 
                                                                 <View className="inner-circle">
 
-                                                                        <View className="lock-icon-containers">
-                                                                                <Image source={Icons.lockIcon} className="lock-icons" />
-                                                                        </View>
+                                                                <View className="lock-icon-containers">
+                                                                        <Image source={Icons.lockIcon} className="lock-icons" />
+                                                                </View>
 
                                                                 </View>
 
@@ -325,10 +316,10 @@ const ForgotPassword = () => {
                                                                                         value={digit}
                                                                                         onChangeText={(text) => handleChangeText(text, index)}
                                                                                         onKeyPress={(e) => handleKeyPress(e, index)}
-
-
-
-
+                                                                                                                                                                                                                              
+                                                                                        
+                                                                                       
+                                                                                        
                                                                                 />
                                                                         ))}
                                                                 </View>
@@ -337,12 +328,10 @@ const ForgotPassword = () => {
                                                                 <View className="verfiy-container-button">
 
                                                                         <TouchableOpacity className="verfiy-button"
-                                                                                onPress={handleVerfiy}
-                                                                                disabled={isLocked || isLoading}
+                                                                        onPress={handleVerfiy}
+                                                                        disabled={isLocked}
                                                                         >
-                                                                                <Text className="verfiy-text">
-                                                                                        {isLoading ? "Verifying..." : "Verify"}
-                                                                                </Text>
+                                                                                <Text className="verfiy-text">Verify</Text>
 
                                                                         </TouchableOpacity>
 
@@ -358,7 +347,7 @@ const ForgotPassword = () => {
                                                                         </Text>
                                                                 )}
 
-
+                                                             
 
                                                                 <View className="or-container">
 
@@ -371,31 +360,28 @@ const ForgotPassword = () => {
 
 
                                                                 <TouchableOpacity className="resend-button"
-                                                                        onPress={handleResend}
-                                                                        disabled={isLoading || isLocked}
+                                                                onPress={handleResend}
                                                                 >
-                                                                        <Text className="resend-text">
-                                                                                {isLoading ? "Sending..." : "Resend"}
-                                                                        </Text>
+                                                                        <Text className="resend-text">Resend </Text>
                                                                 </TouchableOpacity>
 
 
-
+                                                                
                                                         </View>
                                                 </View>
                                         </Modal>
 
                                 </View>
 
-
+                
 
 
                         </View>
                 </SafeAreaView>
-
+     
         );
 
-};
+        };
 
 
 

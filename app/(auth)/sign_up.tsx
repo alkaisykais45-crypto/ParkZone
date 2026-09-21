@@ -2,7 +2,7 @@ import { Image, ScrollView, Text, TextInput, TouchableOpacity, View } from "reac
 
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Icons } from "../../constants/icons";
-import { router } from "expo-router";
+import { router } from "expo-router/build/exports";
 import { NumberLimit, password_regex, empty_field, email_regex } from ".././lib/auth";
 import { useState } from "react";
 import { signUp, checkUserExists } from ".././services/auth";

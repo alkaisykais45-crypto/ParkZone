@@ -2,7 +2,7 @@ import { Text, TextInput, TouchableOpacity, View, Image } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Icons } from "../../constants/icons";
-import { router } from "expo-router";
+import { router } from "expo-router/build/exports";
 import { NumberLimit, password_regex, empty_field } from ".././lib/auth";
 import { useState } from "react";
 
