@@ -171,3 +171,7 @@ export const updatePassword = async (newPassword: string) => {
     return data;
 };
 
+export default function () {
+    return null;
+}
+

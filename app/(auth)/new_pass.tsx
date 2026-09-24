@@ -13,7 +13,11 @@ const NewPassword = () => {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const isPasswordValid = password_regex(newPassword) === null;
+  const hasMinLength = newPassword.length >= 8;
+  const hasUpperLower = /[A-Z]/.test(newPassword) && /[a-z]/.test(newPassword);
+  const hasSpecial = /[@$!%*?&#^()_+=\-[\]{}|;:'",.<>/?]/.test(newPassword);
+  const hasNumber = /\d/.test(newPassword);
+  const isPasswordValid = hasMinLength && hasUpperLower && (hasSpecial || hasNumber);
 
   const handleResetPassword = async () => {
     const emptyErr = empty_field(newPassword) || empty_field(confirmPassword);
@@ -40,7 +44,7 @@ const NewPassword = () => {
       await updatePassword(newPassword);
       setTimeout(() => {
         router.replace("/(auth)/change_succesfully");
-      }, 1500);
+      }, 1000);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to update password. Please try again.";
@@ -102,22 +106,21 @@ const NewPassword = () => {
 
         <View className="verfication-container-password">
           <Text
-            className={`password-verification-text_a ${isPasswordValid ? "password-verfication-valid" : "password-verfication-invalid"}`}
+            className={`password-verification-text_a ${hasMinLength ? "password-verfication-valid" : "password-verfication-invalid"}`}
           >
-            Password must contain at least 8 characters
+            {hasMinLength ? "✓ " : "• "}Password must contain at least 8 characters
           </Text>
           <Text
-            className={`password-verification-text_b ${isPasswordValid ? "password-verfication-valid" : "password-verfication-invalid"}`}
+            className={`password-verification-text_b ${hasUpperLower ? "password-verfication-valid" : "password-verfication-invalid"}`}
           >
-            Password must contain at least 1 uppercase letter and lowercase
+            {hasUpperLower ? "✓ " : "• "}Password must contain at least 1 uppercase and lowercase letter
           </Text>
           <Text
-            className={`password-verification-text_c ${isPasswordValid ? "password-verfication-valid" : "password-verfication-invalid"}`}
+            className={`password-verification-text_c ${hasSpecial ? "password-verfication-valid" : "password-verfication-invalid"}`}
           >
-            Password must contain at least 1 special character
+            {hasSpecial ? "✓ " : "• "}Password must contain at least 1 special character
           </Text>
         </View>
-          
 
         {successMsg && <Text className="success-text">{successMsg}</Text>}
 
@@ -125,8 +128,7 @@ const NewPassword = () => {
           <TouchableOpacity
             className="forgot-password-submit-button"
             onPress={handleResetPassword}
-            disabled={isLoading}
-            
+            disabled={isLoading || !isPasswordValid}
           >
             <Text className="forgot-password-submit-button-text">
               {isLoading ? "Updating..." : "Change Password"}
