@@ -11,7 +11,8 @@
     },
     "android": {
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.parkZone"
     },
     "scheme": "parkzone",
     "web": {

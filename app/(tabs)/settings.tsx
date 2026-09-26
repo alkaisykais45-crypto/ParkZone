@@ -1,15 +1,15 @@
 import {Text, View, Image, TextInput} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
-const Activities = ()=>{
+const Settings = ()=>{
 
     return (
       <SafeAreaView>
         <View className="auth-content">
-            <Text> This is Activities Page</Text>
+            <Text> This is Settings Page</Text>
         </View>
       </SafeAreaView>
     );
 }
 
-export default Activities;
+export default Settings;

@@ -1038,3 +1038,101 @@
 .password-verfication-invalid{
     color: #ef4444; 
 }
+
+
+.tabs-container {
+    background-color: #ffffff;
+    border-radius: 12px;
+    padding: 12px;
+    border: 1px solid #e5e7eb;
+}
+
+
+.home-icon,
+.vehicle-icon,
+.pay-icon,
+.activity-icon {
+    width: 24px;
+    height: 24px;
+    align-self: center;
+    justify-content: space-between;
+   
+}
+
+
+.tabs-container{
+
+  background-color: #ffffff;
+
+}
+
+
+.map-content{
+    width:100%;
+    height: 400px;
+}
+
+
+.map-controls{
+    width: 100%;
+    flex-direction: row;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-top: -370px;
+    padding-left: 28px;
+    padding-right: 28px;
+}
+
+.map-control-stack{
+    flex-direction: column;
+    gap: 16px;
+}
+
+
+.search-icon{
+    width: 37px;
+    height: 37px;
+}
+
+.inner-square{
+    background-color: #ffffff;
+    width: 50px;
+    height: 50px;
+    border-radius:12px;
+    align-items: center;
+    justify-content: center;
+}
+
+
+
+.inner-square-settings{
+    background-color: #ffffff;
+    width: 50px;
+    height: 50px;
+    border-radius:12px;
+    align-items: center;
+    justify-content: center;
+}
+
+
+.settings-icon{
+    width: 37px;
+    height: 37px;
+}
+
+
+.inner-square-charging-station{
+    background-color: #ffffff;
+    width: 50px;
+    height: 50px;
+    border-radius:12px;
+    align-items: center;
+    justify-content: center;
+    margin-top:195px;
+}
+
+.charging-station-icon{
+    width: 37px;
+    height: 37px;
+
+}

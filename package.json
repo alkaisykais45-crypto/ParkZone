@@ -4,14 +4,17 @@
   "main": "expo-router/entry",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "web": "expo start --web"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@rnmapbox/maps": "^10.3.5",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.116.0",
+    "@vonage/messages": "^1.27.1",
+    "@vonage/server-sdk": "^3.30.1",
     "dotenv": "^16.6.1",
     "expo": "~54.0.36",
     "expo-constants": "~18.0.14",
@@ -23,6 +26,7 @@
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-confetti-cannon": "^1.5.2",
+    "react-native-maps": "1.20.1",
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",

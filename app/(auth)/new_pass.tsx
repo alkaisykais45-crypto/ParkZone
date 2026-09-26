@@ -6,7 +6,6 @@ import { Icons } from "../../constants/icons";
 import { password_regex, empty_field } from "../lib/auth";
 import { updatePassword } from "../services/auth";
 
-
 const NewPassword = () => {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");

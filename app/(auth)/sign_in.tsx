@@ -42,7 +42,7 @@ const SignIn = () => {
         setSignInError(error.message);
         return;
       }
-      router.replace("/(tabs)/Home");
+      router.replace("/(tabs)/home");
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : "Failed to sign in. Please try again.";
@@ -53,7 +53,7 @@ const SignIn = () => {
   };
 
   const handleDemoSignIn = () => {
-    router.replace("/(tabs)/Home");
+    router.replace("/(tabs)/home");
   };
 
   return (

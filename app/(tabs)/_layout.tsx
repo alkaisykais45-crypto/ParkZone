@@ -1,86 +1,61 @@
 import { Tabs } from "expo-router";
-import { Text, StyleSheet } from "react-native";
+import { Icons } from "../../constants/icons";
+import { Image } from "react-native";
 
-interface TabIconProps {
-  glyph: string;
-  focused: boolean;
-}
 
-const TabIcon = ({ glyph, focused }: TabIconProps) => (
-  <Text style={[styles.tabIcon, focused && styles.tabIconFocused]}>{glyph}</Text>
-);
 
-export default function TabLayout() {
+
+
+
+// This is the layout for the bottom tab navigation in the app.
+
+
+const TabsLayout = () => {
   return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarActiveTintColor: "#2563EB",
-        tabBarInactiveTintColor: "#94A3B8",
-        tabBarStyle: styles.tabBar,
-        tabBarLabelStyle: styles.tabBarLabel,
-      }}
-    >
+    <Tabs screenOptions={{ headerShown: false }}>
+
+  
       <Tabs.Screen
-        name="Home"
+        name="home"
         options={{
           title: "Home",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="⌂" focused={focused} />,
+          tabBarIcon: () => <Image className="home-icon" source={Icons.HomeIcon} />,
         }}
       />
       <Tabs.Screen
         name="vehicles"
         options={{
           title: "Vehicles",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="▣" focused={focused} />,
+          tabBarIcon: () => <Image className="vehicle-icon" source={Icons.VehicleIcon} />,
         }}
       />
       <Tabs.Screen
-        name="Permits"
+        name="payments"
         options={{
-          title: "Permits",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="▤" focused={focused} />,
+          title: "Payments",
+          tabBarIcon: () => <Image className="pay-icon" source={Icons.PayIcon} />,
         }}
       />
       <Tabs.Screen
-        name="Activities"
+        name="activities"
         options={{
           title: "Activity",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="◷" focused={focused} />,
+          tabBarIcon: () => <Image className="activity-icon" source={Icons.ActivityIcon} />,
         }}
       />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: "Profile",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="◉" focused={focused} />,
-        }}
-      />
+
+
+      <Tabs.Screen name="permits" options={{ href: null }} />
+      <Tabs.Screen name="profile" options={{ href: null }} />
+      <Tabs.Screen name="settings" options={{ href: null }} />
     </Tabs>
   );
-}
+};
 
-const styles = StyleSheet.create({
-  tabBar: {
-    height: 68,
-    paddingTop: 8,
-    paddingBottom: 8,
-    borderTopColor: "#E2E8F0",
-    borderTopWidth: 1,
-    backgroundColor: "#FFFFFF",
-  },
-  tabBarLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    marginBottom: 4,
-  },
-  tabIcon: {
-    fontSize: 20,
-    opacity: 0.5,
-    color: "#64748B",
-  },
-  tabIconFocused: {
-    opacity: 1,
-    color: "#2563EB",
-  },
-});
+export default TabsLayout;
+
+
+
+
+
+
