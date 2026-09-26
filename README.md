@@ -6,6 +6,8 @@ ParkZone is a mobile parking application built with React Native and Expo. The a
 
 - Expo Router navigation
 - ParkZone welcome and home screens
+- Home screen map with search and menu controls
+- Charger-station control with active and inactive states
 - User authentication flows
 - Sign in and sign up
 - Password recovery and password reset
@@ -85,9 +87,13 @@ Create a `.env` file in the project root and add the Supabase values for your en
 ```env
 EXPO_PUBLIC_SUPABASE_URL=your_supabase_project_url
 EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_key
+EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN=pk.your_public_mapbox_token
+RNMAPBOX_MAPS_DOWNLOAD_TOKEN=sk.your_mapbox_download_token
 ```
 
 Never commit `.env` files or private keys to the repository.
+
+Create the two Mapbox tokens in the [Mapbox Console](https://console.mapbox.com/): use a public `pk...` token for the app and a secret `sk...` downloads token for native builds. The downloads token must have the `DOWNLOADS:READ` scope. Copy `.env.example` to `.env`, then run `npx expo prebuild` and use a development build; Mapbox is a native module and does not run in Expo Go.
 
 ### Run the Application
 
