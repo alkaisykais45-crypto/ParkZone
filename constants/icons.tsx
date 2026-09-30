@@ -41,6 +41,10 @@ export const settingsIcon: ImageSourcePropType = require("../app/assets/icons/me
 
 export const ChargingStation: ImageSourcePropType = require("../app/assets/icons/charging-station.png");
 
+export const searchBarIcon: ImageSourcePropType = require("../app/assets/icons/search-bar.png");
+
+export const mapIndicatorIcon: ImageSourcePropType = require("../app/assets/icons/indicator.png");
+
 
 export const Icons = {
     
@@ -58,10 +62,12 @@ export const Icons = {
      checkBoxCheckedIcon: checkBoxCheckedIcon,
      HomeIcon: HomeIcon,
      VehicleIcon: VehicleIcon,
+     mapIndicatorIcon: mapIndicatorIcon,
      notificationIcon: notificationIcon,
      PayIcon: PayIcon,
      ActivityIcon: ActivityIcon,
      searchIcon: searchIcon,
+     searchBarIcon: searchBarIcon,
      settingsIcon: settingsIcon,
      ChargingStation: ChargingStation
 

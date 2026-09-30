@@ -1,8 +1,9 @@
-import { TouchableOpacity, View , Image} from "react-native";
+import { TouchableOpacity, View , Image,Text, TextInput} from "react-native";
 import { useState } from "react";
 import { SafeAreaView } from "react-native-safe-area-context";
 import MapView from "react-native-maps";
-import { ScrollView } from "react-native";
+import BottomSheet, { BottomSheetScrollView } from "@gorhom/bottom-sheet";
+import { Icons } from "../../constants/icons";
 
 
 const Home = ()=>{
@@ -12,30 +13,47 @@ const Home = ()=>{
 
     return (
 
-      <ScrollView>
-      <SafeAreaView className="auto-page">
+      <SafeAreaView className="home-screen">
 
 
 
-            <View className="map-content">
-              <MapView
-                style={{ flex: 1 }}
-                initialRegion={{
-                  latitude: 37.78825,
-                  longitude: -122.4324,
-                  latitudeDelta: 0.0922,
-                  longitudeDelta: 0.0421,
-                }}
-              />
-            </View>
+            <View className="map-section">
+              <View className="map-content">
+                <MapView
+                  style={{ flex: 1 }}
+                  initialRegion={{
+                    latitude: 37.78825,
+                    longitude: -122.4324,
+                    latitudeDelta: 0.0922,
+                    longitudeDelta: 0.0421,
+                  }}
+                />
 
-            <View className="map-controls">
+                <View
+                  className="map-indicator"
+                  pointerEvents="none"
+                  style={{
+                    top: "50%",
+                    left: "50%",
+                    transform: [{ translateX: -20 }, { translateY: -52 }],
+                  }}
+                >
+                  <View className="map-indicator-head">
+                    <Image className="map-indicator-icon" style={{ tintColor: "#FFFFFF" }} source={Icons.mapIndicatorIcon} />
+                  </View>
+                  <View className="map-indicator-tip" />
+                </View>
+              </View>
+
+              <View className="map-controls">
               <View className="map-control-stack">
+
                 <TouchableOpacity>
                   <View className="inner-square">
-                    <Image className="search-icon" source={require("../assets/icons/search.png")} />
+                    <Image className="search-icon"  source={require("../assets/icons/search.png")} />
                   </View>
                 </TouchableOpacity>
+
 
                 <TouchableOpacity
                   onPress={() => setIsPressed(!isPressed)}
@@ -48,6 +66,7 @@ const Home = ()=>{
                     />
                   </View>
                 </TouchableOpacity>
+
               </View>
 
               <TouchableOpacity>
@@ -56,18 +75,53 @@ const Home = ()=>{
                 </View>
               </TouchableOpacity>
 
+              </View>
             </View>
 
+            <BottomSheet
+              index={0}
+              snapPoints={['25%', '50%']}
+              enableDynamicSizing={false}
+              containerStyle={{ zIndex: 20, elevation: 20 }}
+              backgroundStyle={{ backgroundColor: "#ffffff" }}
+              handleIndicatorStyle={{ backgroundColor: "#6b7280" }}
+            >
+              <BottomSheetScrollView>
+
+                <View className="bottom-sheet-content">
+
+                  <View className="search-bar-container">
+                    <View className="search-bar-field">
+                      <Image className="search-bar-icon" source={Icons.searchBarIcon} /> 
+                      <TextInput
+                        className="search-bar"
+                        placeholder="Enter parking location or Zone" style= {{marginLeft: 10}}
+                      />
+                    </View>
+
+                  </View>
 
 
-            <View className="bottom-bar-container">
-            </View>
+
+
+
+
+                </View>
+
+              </BottomSheetScrollView>
+            </BottomSheet>
+
+
+
+
+                
+
+        
 
 
 
 
       </SafeAreaView>
-      </ScrollView>
       
 
 

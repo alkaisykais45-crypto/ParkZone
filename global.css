@@ -1069,16 +1069,28 @@
 
 .map-content{
     width:100%;
-    height: 400px;
+    flex: 1;
+}
+
+.home-screen {
+    flex: 1;
+}
+
+.map-section{
+    position: relative;
+    width: 100%;
+    flex: 1;
 }
 
 
 .map-controls{
+    position: absolute;
+    top: 25px;
+    left: 0;
     width: 100%;
     flex-direction: row;
     align-items: flex-start;
     justify-content: space-between;
-    margin-top: -370px;
     padding-left: 28px;
     padding-right: 28px;
 }
@@ -1092,6 +1104,36 @@
 .search-icon{
     width: 37px;
     height: 37px;
+}
+
+.search-bar-container {
+    width: 100%;
+    padding: 0 20px;
+}
+
+.search-bar-field {
+    position: relative;
+    width: 100%;
+    height: 52px;
+    justify-content: center;
+}
+
+.search-bar-icon {
+    position: absolute;
+    left: 14px;
+    z-index: 1;
+    width: 20px;
+    height: 20px;
+}
+
+.search-bar {
+    width: 100%;
+    height: 52px;
+    padding: 0 14px 0 44px;
+    border-radius: 12px;
+    color: #1f2937;
+    background-color: #f3f4f6;
+    font-size: 15px;
 }
 
 .inner-square{
@@ -1135,4 +1177,67 @@
     width: 37px;
     height: 37px;
 
+}
+
+
+
+
+
+.search-bar-container{
+
+    justify-content: center;
+    align-items:center;
+    margin-top: 13px;
+}
+
+
+.search-bar{
+    width: 300px;
+    height: 50px;
+    border-radius: 16px;
+    background-color: #dedede;
+}
+
+
+
+.search-bar-icon{
+    width: 30px;
+    height: 30px;
+}
+
+
+.map-indicator{
+    position: absolute;
+    width: 40px;
+    height: 52px;
+    align-items: center;
+    z-index: 1;
+    elevation: 1;
+}
+.map-indicator-head {
+    width: 40px;
+    height: 40px;
+    align-items: center;
+    justify-content: center;
+    border-width: 2px;
+    border-color: #ffffff;
+    border-radius: 20px;
+    background-color: #1f2937;
+}
+.map-indicator-tip {
+    position: absolute;
+    bottom: 0;
+    width: 0;
+    height: 0;
+    border-left-width: 9px;
+    border-right-width: 9px;
+    border-top-width: 12px;
+    border-left-color: transparent;
+    border-right-color: transparent;
+    border-top-color: #1f2937;
+}
+.map-indicator-icon{
+    width: 25px;
+    height: 25px;
+    tint-color: #ffffff;
 }
