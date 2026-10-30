@@ -18,7 +18,7 @@ const Successfully = () => {
             <View style={styles.badge}>
               <Image
                 source={Icons.logoImg}
-                style={{ width: 34, height: 34, tintColor: "#000000" }}
+                style={styles.badgeImage}
                 resizeMode="contain"
               />
             </View>
@@ -31,18 +31,9 @@ const Successfully = () => {
 
           <Text style={styles.title}>You&apos;re All Set!</Text>
           <Text style={styles.subtitle}>
-            Your smart motorist profile has been registered successfully with end-to-end cryptographic protection.
+            Your smart motorist profile has been registered successfully with
+            end-to-end cryptographic protection.
           </Text>
-
-          <ConfettiCannon
-            count={70}
-            origin={{ x: 0, y: 0 }}
-            autoStart
-            fadeOut
-            colors={["#FFFFFF", "#E4E4E7", "#A1A1AA", "#71717A"]}
-            explosionSpeed={350}
-            fallSpeed={2500}
-          />
 
           <TouchableOpacity
             style={styles.primaryPillBtn}
@@ -52,6 +43,16 @@ const Successfully = () => {
             <Text style={styles.primaryPillBtnText}>Continue to Sign In</Text>
           </TouchableOpacity>
         </GlassCard>
+
+        <ConfettiCannon
+          count={70}
+          origin={{ x: 0, y: 0 }}
+          autoStart
+          fadeOut
+          colors={["#FFFFFF", "#E4E4E7", "#A1A1AA", "#71717A"]}
+          explosionSpeed={350}
+          fallSpeed={2500}
+        />
       </SafeAreaView>
     </GlassBackground>
   );
@@ -85,10 +86,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  badgeText: {
-    color: "#FFFFFF",
-    fontSize: 34,
-    fontWeight: "900",
+  badgeImage: {
+    width: 34,
+    height: 34,
+    tintColor: "#000000",
   },
   eyebrowContainer: {
     flexDirection: "row",
