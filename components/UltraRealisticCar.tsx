@@ -173,9 +173,37 @@ function adjustBrightness(hex: string, percent: number): string {
   }
 }
 
+const COLOR_ALIASES: Record<string, keyof typeof COLOR_MAP> = {
+  black: "obsidian",
+  dark: "obsidian",
+  noir: "obsidian",
+  gray: "titanium",
+  grey: "titanium",
+  silver: "silver",
+  white: "glacier",
+  blanc: "glacier",
+  red: "crimson",
+  rouge: "crimson",
+  blue: "sapphire",
+  bleu: "sapphire",
+  green: "emerald",
+  vert: "emerald",
+  orange: "amber",
+  yellow: "champagne",
+  gold: "champagne",
+  pearl: "pearl",
+  carbon: "carbon",
+};
+
 export function resolveCarColors(colorNameOrHex?: CarColorVariant): ResolvedCarColors {
   if (!colorNameOrHex) return COLOR_MAP.obsidian;
-  if (COLOR_MAP[colorNameOrHex]) return COLOR_MAP[colorNameOrHex];
+  const normalized = colorNameOrHex.trim().toLowerCase();
+  if (COLOR_MAP[normalized as keyof typeof COLOR_MAP]) {
+    return COLOR_MAP[normalized as keyof typeof COLOR_MAP];
+  }
+  if (COLOR_ALIASES[normalized]) {
+    return COLOR_MAP[COLOR_ALIASES[normalized]];
+  }
 
   if (colorNameOrHex.startsWith("#")) {
     return {

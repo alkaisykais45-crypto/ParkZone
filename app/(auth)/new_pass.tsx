@@ -296,7 +296,7 @@ const styles = StyleSheet.create({
   },
   mainHeading: {
     fontSize: 32,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.6,
     marginBottom: 8,
   },
@@ -306,7 +306,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
   },
   faqLink: {
-    fontWeight: "700",
+    fontWeight: "500",
     textDecorationLine: "underline",
   },
   errorBanner: {
@@ -320,7 +320,7 @@ const styles = StyleSheet.create({
   errorBannerText: {
     color: "#EF4444",
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
     flex: 1,
   },
   inputPill: {
@@ -337,7 +337,7 @@ const styles = StyleSheet.create({
   textInput: {
     flex: 1,
     fontSize: 14.5,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   eyeToggleBtn: {
     padding: 4,
@@ -354,7 +354,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 1,
   },
   footerRow: {
@@ -363,10 +363,10 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   footerLinkBold: {
-    fontWeight: "800",
+    fontWeight: "600",
     textDecorationLine: "underline",
   },
 });

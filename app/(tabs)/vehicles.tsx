@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -21,13 +21,15 @@ import {
     fetchUserVehicles,
     registerVehicle,
     deleteVehicle,
+    setDefaultVehicle,
     RegisteredVehicle,
     VehicleType,
 } from "../services/parking";
 import { useNavigation } from "@react-navigation/native";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useTheme } from "../../hooks/useTheme";
+import { VehiclesSkeleton } from "../../components/SkeletonLoader";
 
 const Vehicles = () => {
     const theme = useTheme();
@@ -56,17 +58,7 @@ const Vehicles = () => {
 
     const [refreshing, setRefreshing] = useState(false);
 
-    useEffect(() => {
-        loadVehicles();
-    }, []);
-
-    const onRefresh = async () => {
-        setRefreshing(true);
-        await loadVehicles();
-        setRefreshing(false);
-    };
-
-    const loadVehicles = async () => {
+    const loadVehicles = useCallback(async () => {
         setLoading(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
@@ -82,54 +74,75 @@ const Vehicles = () => {
         } finally {
             setLoading(false);
         }
+    }, []);
+
+    useEffect(() => {
+        loadVehicles();
+    }, [loadVehicles]);
+
+    useFocusEffect(
+        useCallback(() => {
+            loadVehicles();
+        }, [loadVehicles])
+    );
+
+    const onRefresh = async () => {
+        setRefreshing(true);
+        await loadVehicles();
+        setRefreshing(false);
+    };
+
+    const handleSetDefault = async (v: RegisteredVehicle) => {
+        try {
+            const { data: { user } } = await supabase.auth.getUser();
+            if (!user?.id) return;
+            await setDefaultVehicle(user.id, v.id);
+            setVehicles((prev) =>
+                prev.map((item) => ({
+                    ...item,
+                    is_default: item.id === v.id,
+                }))
+            );
+            Alert.alert("Active Vehicle Selected", `${v.plate_number} is now your active vehicle for parking.`);
+        } catch (e: any) {
+            Alert.alert("Error", e.message || "Could not set active vehicle.");
+        }
     };
 
     const handleRegisterVehicle = async () => {
         if (!plateNumber.trim()) {
-            Alert.alert("Missing Plate Number", "Please enter your vehicle's license plate (e.g. RAD 123 A).");
+            Alert.alert("Missing Plate Number", "Please enter your vehicle's license plate.");
             return;
         }
 
         setSubmitting(true);
         try {
             const { data: { user } } = await supabase.auth.getUser();
-            const userId = user?.id || "demo-user";
+            if (!user?.id) {
+                Alert.alert("Sign In Required", "Please sign in to save your vehicle to the database.", [
+                    { text: "Cancel", style: "cancel" },
+                    { text: "Sign In", onPress: () => router.push("/(auth)/sign_in") },
+                ]);
+                return;
+            }
 
             const result = await registerVehicle({
-                userId,
+                userId: user.id,
                 plateNumber,
                 vehicleType,
                 makeModel: makeModel.trim(),
                 color: color.trim(),
                 handicapPermitNumber: handicapPermit.trim(),
-                isDefault: vehicles.length === 0,
+                isDefault: true,
             });
 
-            if (result.error) {
-                Alert.alert("Registration Error", result.error);
-            } else if (result.data) {
-                setVehicles((prev) => [result.data!, ...prev]);
-                setModalVisible(false);
-                resetForm();
-                Alert.alert("Vehicle Registered", `Plate ${result.data.plate_number} is now ready for Kigali ParkZone.`);
+            if (result.error || !result.data) {
+                Alert.alert("Registration Error", result.error || "Unable to save vehicle in database.");
             } else {
-                // Offline fallback addition
-                const cleanPlate = plateNumber.trim().toUpperCase();
-                const newDemoVehicle: RegisteredVehicle = {
-                    id: `v-${Date.now()}`,
-                    user_id: userId,
-                    plate_number: cleanPlate,
-                    plate_hash: hashLicensePlate(cleanPlate),
-                    masked_plate: maskLicensePlate(cleanPlate),
-                    vehicle_type: vehicleType,
-                    make_model: makeModel.trim() || "Private Car",
-                    color: color.trim() || "Black",
-                    handicap_permit_number: handicapPermit.trim(),
-                    is_default: vehicles.length === 0,
-                };
-                setVehicles((prev) => [newDemoVehicle, ...prev]);
+                await loadVehicles();
                 setModalVisible(false);
                 resetForm();
+                Alert.alert("Vehicle Registered", `Plate ${result.data.plate_number} is now registered and set as your active vehicle.`);
             }
         } catch (err: any) {
             Alert.alert("Error", err.message || "Failed to register vehicle.");
@@ -168,20 +181,20 @@ const Vehicles = () => {
         switch (type) {
             case "ev":
                 return (
-                    <View style={[styles.badge, styles.badgeEV]}>
-                        <Text style={styles.badgeTextEV}>EV / ELECTRIC</Text>
+                    <View style={[styles.badge, { backgroundColor: theme.evGreenSoft, borderColor: theme.evGreenBorder, borderWidth: 1 }]}>
+                        <Text style={[styles.badgeTextEV, { color: theme.evGreen }]}>EV / ELECTRIC</Text>
                     </View>
                 );
             case "handicap":
                 return (
-                    <View style={[styles.badge, styles.badgeHandicap]}>
-                        <Text style={styles.badgeTextHandicap}>HANDICAP PERMIT</Text>
+                    <View style={[styles.badge, { backgroundColor: theme.surfaceMuted, borderColor: theme.borderStrong, borderWidth: 1 }]}>
+                        <Text style={[styles.badgeTextHandicap, { color: theme.text }]}>HANDICAP PERMIT</Text>
                     </View>
                 );
             default:
                 return (
-                    <View style={[styles.badge, styles.badgeGas]}>
-                        <Text style={styles.badgeTextGas}>GASOLINE</Text>
+                    <View style={[styles.badge, { backgroundColor: theme.pillInactiveBg, borderColor: theme.border, borderWidth: 1 }]}>
+                        <Text style={[styles.badgeTextGas, { color: theme.textSecondary }]}>GASOLINE</Text>
                     </View>
                 );
         }
@@ -217,9 +230,7 @@ const Vehicles = () => {
 
             {/* Vehicle List */}
             {loading ? (
-                <View style={styles.centered}>
-                    <ActivityIndicator color={theme.text} size="large" />
-                </View>
+                <VehiclesSkeleton />
             ) : (
                 <FlatList
                     data={vehicles}
@@ -270,13 +281,13 @@ const Vehicles = () => {
                                     style={[
                                         styles.plateContainer,
                                         {
-                                            backgroundColor: theme.isDark ? "#171717" : "#F4F4F6",
+                                            backgroundColor: theme.background,
                                             borderColor: theme.borderStrong,
                                         },
                                     ]}
                                 >
-                                    <View style={styles.plateFlag}>
-                                        <Text style={styles.plateFlagText}>RWA</Text>
+                                    <View style={[styles.plateFlag, { backgroundColor: theme.pillActiveBg }]}>
+                                        <Text style={[styles.plateFlagText, { color: theme.pillActiveText }]}>RWA</Text>
                                     </View>
                                     <Text style={[styles.plateText, { color: theme.text }]}>{item.plate_number}</Text>
                                 </View>
@@ -295,26 +306,37 @@ const Vehicles = () => {
                                 ) : null}
                             </View>
 
-                            <View style={styles.cardFooter}>
+                            <View style={[styles.cardFooter, { borderTopColor: theme.border }]}>
                                 {item.is_default ? (
                                     <View
                                         style={[
                                             styles.defaultBadge,
-                                            { backgroundColor: theme.isDark ? "#2A2A2A" : "#E4E4E7" },
+                                            { backgroundColor: theme.pillActiveBg },
                                         ]}
                                     >
-                                        <Text style={[styles.defaultBadgeText, { color: theme.text }]}>
-                                            DEFAULT VEHICLE
+                                        <Text style={[styles.defaultBadgeText, { color: theme.pillActiveText }]}>
+                                            ACTIVE VEHICLE • IN USE
                                         </Text>
                                     </View>
                                 ) : (
-                                    <View />
+                                    <TouchableOpacity
+                                        style={[
+                                            styles.defaultBadge,
+                                            { backgroundColor: theme.surfaceMuted, borderWidth: 1, borderColor: theme.border },
+                                        ]}
+                                        onPress={() => handleSetDefault(item)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={[styles.defaultBadgeText, { color: theme.textSecondary }]}>
+                                            Set as Active
+                                        </Text>
+                                    </TouchableOpacity>
                                 )}
                                 <TouchableOpacity
                                     onPress={() => handleDelete(item.id, item.plate_number)}
                                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                 >
-                                    <Text style={styles.deleteText}>Remove</Text>
+                                    <Text style={[styles.deleteText, { color: theme.danger }]}>Remove</Text>
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -571,7 +593,7 @@ const styles = StyleSheet.create({
     },
     title: {
         fontSize: 18,
-        fontWeight: "800",
+        fontWeight: "600",
         color: "#FFFFFF",
         letterSpacing: -0.3,
     },
@@ -579,7 +601,7 @@ const styles = StyleSheet.create({
         fontSize: 11,
         color: "#888888",
         marginTop: 2,
-        fontWeight: "500",
+        fontWeight: "400",
     },
     addButton: {
         backgroundColor: "#FFFFFF",
@@ -589,7 +611,7 @@ const styles = StyleSheet.create({
     },
     addButtonText: {
         color: "#000000",
-        fontWeight: "700",
+        fontWeight: "500",
         fontSize: 13,
     },
     centered: {
@@ -609,7 +631,7 @@ const styles = StyleSheet.create({
     emptyTitle: {
         color: "#FFFFFF",
         fontSize: 18,
-        fontWeight: "700",
+        fontWeight: "400",
         marginBottom: 8,
     },
     emptySubtitle: {
@@ -627,7 +649,7 @@ const styles = StyleSheet.create({
     },
     emptyButtonText: {
         color: "#000000",
-        fontWeight: "700",
+        fontWeight: "400",
         fontSize: 14,
     },
     card: {
@@ -664,12 +686,12 @@ const styles = StyleSheet.create({
     plateFlagText: {
         color: "#FFFFFF",
         fontSize: 10,
-        fontWeight: "800",
+        fontWeight: "500",
     },
     plateText: {
         color: "#FFFFFF",
         fontSize: 16,
-        fontWeight: "800",
+        fontWeight: "600",
         letterSpacing: 1.5,
     },
     badge: {
@@ -685,7 +707,7 @@ const styles = StyleSheet.create({
     badgeTextEV: {
         color: "#FFFFFF",
         fontSize: 10,
-        fontWeight: "800",
+        fontWeight: "500",
     },
     badgeHandicap: {
         backgroundColor: "#27272A",
@@ -695,7 +717,7 @@ const styles = StyleSheet.create({
     badgeTextHandicap: {
         color: "#E4E4E7",
         fontSize: 10,
-        fontWeight: "800",
+        fontWeight: "500",
     },
     badgeGas: {
         backgroundColor: "#202020",
@@ -705,7 +727,7 @@ const styles = StyleSheet.create({
     badgeTextGas: {
         color: "#BBBBBB",
         fontSize: 10,
-        fontWeight: "700",
+        fontWeight: "500",
     },
     cardBody: {
         marginBottom: 14,
@@ -713,7 +735,7 @@ const styles = StyleSheet.create({
     modelText: {
         color: "#DDDDDD",
         fontSize: 15,
-        fontWeight: "500",
+        fontWeight: "400",
     },
     permitText: {
         color: "#888888",
@@ -737,13 +759,13 @@ const styles = StyleSheet.create({
     defaultBadgeText: {
         color: "#999999",
         fontSize: 9,
-        fontWeight: "800",
+        fontWeight: "500",
         letterSpacing: 0.5,
     },
     deleteText: {
         color: "#888888",
         fontSize: 12,
-        fontWeight: "600",
+        fontWeight: "400",
     },
     modalOverlay: {
         flex: 1,
@@ -768,17 +790,17 @@ const styles = StyleSheet.create({
     modalTitle: {
         color: "#FFFFFF",
         fontSize: 18,
-        fontWeight: "800",
+        fontWeight: "600",
     },
     closeButton: {
         color: "#888888",
         fontSize: 20,
-        fontWeight: "600",
+        fontWeight: "500",
     },
     inputLabel: {
         color: "#AAAAAA",
         fontSize: 11,
-        fontWeight: "800",
+        fontWeight: "400",
         letterSpacing: 0.8,
         marginBottom: 8,
         marginTop: 14,
@@ -815,11 +837,11 @@ const styles = StyleSheet.create({
     typeButtonText: {
         color: "#888888",
         fontSize: 11,
-        fontWeight: "700",
+        fontWeight: "500",
     },
     typeButtonTextActive: {
         color: "#000000",
-        fontWeight: "800",
+        fontWeight: "600",
     },
     submitButton: {
         backgroundColor: "#FFFFFF",
@@ -832,6 +854,6 @@ const styles = StyleSheet.create({
     submitButtonText: {
         color: "#000000",
         fontSize: 15,
-        fontWeight: "800",
+        fontWeight: "400",
     },
 });

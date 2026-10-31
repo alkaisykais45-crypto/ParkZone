@@ -1,138 +1,144 @@
 
- const NumberLimit = (number) => {
+const normalizeRwandanPhone = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  const digits = String(raw).replace(/\D/g, "");
 
-    try {
-        if (number.length > 12 || number.length < 12){
-            return "Phone number must be 12 digits in order to continue."
-        }
+  // Accept:
+  // - 7XXXXXXXX   (9 digits, local without leading 0)
+  // - 07XXXXXXXX  (10 digits, local with leading 0)
+  // - 2507XXXXXXXX (12 digits, country code)
+  if (digits.length === 9 && digits.startsWith("7")) {
+    return `+250${digits}`;
+  }
+  if (digits.length === 10 && digits.startsWith("07")) {
+    return `+250${digits.slice(1)}`;
+  }
+  if (digits.length === 12 && digits.startsWith("2507")) {
+    return `+${digits}`;
+  }
+  // Also allow international numbers between 10 and 15 digits
+  if (digits.length >= 10 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+  return null;
+};
 
-        const PhoneRegex = /^[0-9]{12}$/;
-        const alphabetsRegex = /[a-zA-Z]/;
-
-        if (!PhoneRegex.test(number) || alphabetsRegex.test(number)) {
-            return "Invalid phone number format. Please enter a valid phone number.";
-        }
-    } catch (error) {
-        return "An error occurred."
+const NumberLimit = (number) => {
+  try {
+    if (!number || String(number).trim() === "") {
+      return "Please enter your phone number.";
     }
-
-    return null;
- }
-
-
-
- const passVerfication = (password) => {
-
-
-                if (password.length < 8){
-
-                    throw new Error("Password must be at least 8 characters long.");
-                }
-
-                else if (!/[A-Z]/.test(password)) {
-                    throw new Error("Password must contain at least 1 uppercase letter.");
-                }
-                else if (!/[a-z]/.test(password)) {
-                    throw new Error("Password must contain at least 1 lowercase letter.");
-                }
-                else if (!/\d/.test(password)) {
-                    throw new Error("Password must contain at least 1 number.");
-                }
-                else if (!/[@$!%*?&]/.test(password)) {
-                    throw new Error("Password must contain at least 1 special character.");
-                }
-
-                  else {
-
-                    return;
-                  }
-
-        
- }
-
- const otp_regex = (otp) => {
-
-    try{
-        const OtpRegex = /^[0-9]{6}$/;
-        if (!OtpRegex.test(otp)) {
-            return "Invalid OTP format. Please enter a 6-digit OTP.";
-        }
-    } catch (error) {
-        return "An error occurred.";
+    if (/[a-zA-Z]/.test(String(number))) {
+      return "Phone number cannot contain letters.";
+    }
+    const normalized = normalizeRwandanPhone(number);
+    if (!normalized) {
+      return "Please enter a valid phone number (e.g. 078XXXXXXX or +25078XXXXXXX).";
     }
     return null;
- }
+  } catch {
+    return "Invalid phone number format.";
+  }
+};
 
+const passVerfication = (password) => {
+  if (!password || password.length < 8) {
+    throw new Error("Password must be at least 8 characters long.");
+  }
+  if (!/[A-Z]/.test(password)) {
+    throw new Error("Password must contain at least 1 uppercase letter.");
+  }
+  if (!/[a-z]/.test(password)) {
+    throw new Error("Password must contain at least 1 lowercase letter.");
+  }
+  if (!/\d/.test(password)) {
+    throw new Error("Password must contain at least 1 number.");
+  }
+  if (!/[^A-Za-z0-9\s]/.test(password)) {
+    throw new Error("Password must contain at least 1 special character.");
+  }
+};
 
-
- const email_regex = (email) => {
-    const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const check_special_characters = /[!#$%^&*(),?":{}|<>]/;
-    const check_numbers = /^[0-9]+@/;
-
-    try {
-        if (!regex.test(email)) {
-            return "Invalid email format. Please enter a valid email address";
-        }
-
-        else if (/\s/.test(email)) {
-            return "Email address cannot contain spaces. Please enter a valid email address.";
-        }
-
-        else if (check_special_characters.test(email)) {
-            return "Email address cannot contain special characters. Please enter a valid email address.";
-        }
-
-        else if (check_numbers.test(email)) {
-            return "Email address cannot contain only numbers. Please enter a valid email address.";
-        }
-        return null;
-    } catch (error) {
-        return "An error occurred.";
-    }
- }
-
-
- const empty_field = (field) => {
-
-    try {
-         if(field === null || field === undefined || field.trim() === "") {
-            return "This field cannot be empty. Please enter your information.";
-         }
-    } catch (error) {
-        return "An error occurred.";
+const otp_regex = (otp) => {
+  try {
+    const OtpRegex = /^[0-9]{6}$/;
+    if (!OtpRegex.test(String(otp || "").trim())) {
+      return "Invalid OTP format. Please enter a 6-digit OTP.";
     }
     return null;
- }
+  } catch {
+    return "Invalid OTP format.";
+  }
+};
 
- 
-
- const password_regex = (password) => {
-
-    try{
-
-     if (password.length <8 ) {
-
-        return "Password must be at least 8 characters long.";
-     }
-
-     const PasswordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
-
-      if (!PasswordRegex.test(password)) {
-        return "Password must contain at least 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special character.";
-     }
-
-     return null;
-
-    } catch (error) {
-        return "An error occurred.";
+const email_regex = (email) => {
+  try {
+    const trimmed = String(email || "").trim();
+    if (!trimmed) {
+      return "Please enter your email address.";
     }
- }
+    if (/\s/.test(trimmed)) {
+      return "Email address cannot contain spaces.";
+    }
+    const regex = /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/;
+    if (!regex.test(trimmed)) {
+      return "Invalid email format. Please enter a valid email address.";
+    }
+    return null;
+  } catch {
+    return "Invalid email format.";
+  }
+};
 
- const passVerification = passVerfication;
- export { NumberLimit, email_regex, password_regex, empty_field, otp_regex, passVerfication, passVerification };
+const empty_field = (field) => {
+  try {
+    if (field === null || field === undefined || String(field).trim() === "") {
+      return "This field cannot be empty. Please enter your information.";
+    }
+    return null;
+  } catch {
+    return "This field cannot be empty.";
+  }
+};
 
- export default function () {
-   return null;
- }
+const password_regex = (password) => {
+  try {
+    const val = String(password || "");
+    if (val.length < 8) {
+      return "Password must be at least 8 characters long.";
+    }
+    if (!/[A-Z]/.test(val)) {
+      return "Password must contain at least 1 uppercase letter.";
+    }
+    if (!/[a-z]/.test(val)) {
+      return "Password must contain at least 1 lowercase letter.";
+    }
+    if (!/\d/.test(val)) {
+      return "Password must contain at least 1 number.";
+    }
+    if (!/[^A-Za-z0-9\s]/.test(val)) {
+      return "Password must contain at least 1 special character (e.g. !@#$%^&*_-).";
+    }
+    return null;
+  } catch {
+    return "Invalid password format.";
+  }
+};
+
+const passVerification = passVerfication;
+
+export {
+  normalizeRwandanPhone,
+  NumberLimit,
+  email_regex,
+  password_regex,
+  empty_field,
+  otp_regex,
+  passVerfication,
+  passVerification,
+};
+
+export default function () {
+  return null;
+}
 

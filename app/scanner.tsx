@@ -12,8 +12,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
+import { useTheme } from "../hooks/useTheme";
 
 export default function ScannerScreen() {
+  const theme = useTheme();
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
   const [torch, setTorch] = useState(false);
@@ -70,35 +72,52 @@ export default function ScannerScreen() {
 
   // If permission state is still loading
   if (!permission) {
-    return <View style={styles.container} />;
+    return <View style={[styles.container, { backgroundColor: theme.background }]} />;
   }
 
   // Permission not granted state
   if (!permission.granted) {
     return (
-      <View style={[styles.container, styles.permissionContainer]}>
-        <StatusBar barStyle="light-content" translucent />
+      <View
+        style={[
+          styles.container,
+          styles.permissionContainer,
+          { backgroundColor: theme.background },
+        ]}
+      >
+        <StatusBar barStyle={theme.isDark ? "light-content" : "dark-content"} translucent />
         <View style={styles.permissionContent}>
-          <View style={styles.cameraIconBox}>
-            <Ionicons name="camera-outline" size={40} color="#FFFFFF" />
+          <View
+            style={[
+              styles.cameraIconBox,
+              { backgroundColor: theme.surface, borderColor: theme.border },
+            ]}
+          >
+            <Ionicons name="camera-outline" size={40} color={theme.text} />
           </View>
-          <Text style={styles.permissionTitle}>Camera Access Required</Text>
-          <Text style={styles.permissionSubtitle}>
+          <Text style={[styles.permissionTitle, { color: theme.text }]}>
+            Camera Access Required
+          </Text>
+          <Text style={[styles.permissionSubtitle, { color: theme.textSecondary }]}>
             ParkZone needs camera access to scan parking bay QR tokens edge-to-edge.
           </Text>
           <TouchableOpacity
-            style={styles.permissionBtn}
+            style={[styles.permissionBtn, { backgroundColor: theme.primaryBtnBg }]}
             onPress={requestPermission}
             activeOpacity={0.85}
           >
-            <Text style={styles.permissionBtnText}>Enable Camera</Text>
+            <Text style={[styles.permissionBtnText, { color: theme.primaryBtnText }]}>
+              Enable Camera
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.permissionBackBtn}
             onPress={() => router.back()}
             activeOpacity={0.7}
           >
-            <Text style={styles.permissionBackBtnText}>Go Back</Text>
+            <Text style={[styles.permissionBackBtnText, { color: theme.textSecondary }]}>
+              Go Back
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -197,7 +216,7 @@ const styles = StyleSheet.create({
   },
   permissionTitle: {
     fontSize: 20,
-    fontWeight: "800",
+    fontWeight: "600",
     color: "#FFFFFF",
     textAlign: "center",
     marginBottom: 10,
@@ -221,7 +240,7 @@ const styles = StyleSheet.create({
   permissionBtnText: {
     color: "#09090B",
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   permissionBackBtn: {
     paddingVertical: 10,
@@ -229,6 +248,6 @@ const styles = StyleSheet.create({
   permissionBackBtnText: {
     color: "#71717A",
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "500",
   },
 });

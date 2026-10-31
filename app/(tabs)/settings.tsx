@@ -32,7 +32,7 @@ const SETTINGS_CATEGORIES: SettingsNavGroup[] = [
         key: "performance",
         title: "Performance & Offline Cache",
         desc: "Map tile caching, lot prefetch, battery optimization",
-        icon: "speedometer-outline",
+        icon: "rocket-outline",
       },
       {
         key: "navigation",
@@ -54,7 +54,7 @@ const SETTINGS_CATEGORIES: SettingsNavGroup[] = [
       {
         key: "personal",
         title: "Personal Information",
-        desc: "Motorist name, phone, National ID, driver license",
+        desc: "Motorist name, phone, email, emergency contact",
         icon: "person-outline",
       },
       {
@@ -276,13 +276,13 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   headerSubtitle: {
     fontSize: 11,
     marginTop: 2,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   scrollContent: {
     padding: 20,
@@ -293,7 +293,7 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.8,
     marginBottom: 10,
     marginLeft: 4,
@@ -325,7 +325,7 @@ const styles = StyleSheet.create({
   },
   settingLabel: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   settingDesc: {
     fontSize: 11,
@@ -344,12 +344,12 @@ const styles = StyleSheet.create({
   signOutBtnText: {
     color: "#EF4444",
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   versionText: {
     fontSize: 11,
     textAlign: "center",
     marginTop: 20,
-    fontWeight: "600",
+    fontWeight: "400",
   },
 });

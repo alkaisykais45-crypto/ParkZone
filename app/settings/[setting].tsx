@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
+  Modal,
   Platform,
   RefreshControl,
   ScrollView,
@@ -14,7 +16,17 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "../../hooks/useTheme";
+import { SkeletonBox } from "../../components/SkeletonLoader";
+import { supabase } from "../lib/supabase";
+import {
+  DbPaymentMethodRecord,
+  RegisteredVehicle,
+  fetchUserPaymentMethods,
+  fetchUserVehicles,
+  fetchWalletBalance,
+} from "../services/parking";
 
 interface SettingOption {
   title: string;
@@ -38,88 +50,52 @@ interface SettingAction {
   variant?: "default" | "destructive";
 }
 
+interface FieldDef {
+  key: string;
+  label: string;
+  placeholder: string;
+}
+
 interface SettingConfig {
   title: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
-  fields?: [string, string, string?][];
+  fields?: FieldDef[];
   options?: SettingOption[];
   toggles?: SettingToggle[];
   actions?: SettingAction[];
 }
 
+const PERSONAL_FIELDS: FieldDef[] = [
+  { key: "full_name", label: "Full Name", placeholder: "Enter full legal name" },
+  { key: "phone_number", label: "Phone Number", placeholder: "MTN or Airtel phone number" },
+  { key: "email", label: "Email Address", placeholder: "Active email for receipts" },
+  { key: "emergency_contact", label: "Emergency Contact", placeholder: "Next of kin phone number" },
+];
+
+const PAYMENT_FIELDS: FieldDef[] = [
+  { key: "rra_tin", label: "RRA Fiscal TIN Number", placeholder: "Enter TIN for EBM corporate invoices" },
+];
+
 const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
   personal: {
     title: "Personal Information",
-    subtitle: "Update your motorist profile, national ID, and emergency contact details.",
+    subtitle: "Update your motorist profile, email, and emergency contact details.",
     icon: "person-outline",
-    fields: [
-      ["Full Name", "Aline Mukamana", "Enter full legal name"],
-      ["Phone Number", "+250 788 123 456", "MTN or Airtel phone number"],
-      ["Email Address", "aline.mukamana@email.com", "Active email for receipts"],
-      ["National ID / Passport", "1 1995 8 0012345 0 12", "Rwandan NID or passport"],
-      ["Driver License No.", "RW-DL-98214-KGL", "Valid RNP traffic license"],
-      ["Emergency Contact", "+250 788 987 654", "Next of kin phone number"],
-    ],
+    fields: PERSONAL_FIELDS,
   },
   vehicles: {
     title: "Vehicles & Permits",
-    subtitle: "Manage vehicles linked to your ParkZone account across Rwanda.",
+    subtitle: "Manage vehicles and permits linked to your ParkZone account in the database.",
     icon: "car-outline",
-    options: [
-      {
-        title: "RAB 123 C · Toyota RAV4",
-        desc: "Primary Vehicle · Oblique Bays Enabled",
-        badge: "PRIMARY",
-      },
-      {
-        title: "RAC 491 F · Volkswagen Golf",
-        desc: "Secondary Vehicle · Standard Regular Bay",
-        badge: "ACTIVE",
-      },
-      {
-        title: "RAD 245 B · Hyundai Ioniq 5",
-        desc: "Electric Vehicle · CCS2 Fast Plug Allowed",
-        badge: "EV READY",
-      },
-      {
-        title: "Add New Vehicle",
-        desc: "Register plate number, make & color",
-        action: "add_vehicle",
-      },
-      {
-        title: "Handicap Parking Permit",
-        desc: "Link approved ministerial concession permit (RWA-DIS)",
-        action: "permit",
-      },
-    ],
+    options: [],
   },
   payments: {
     title: "Payment Channels",
-    subtitle: "Configure automated parking checkout and MoMo accounts in RWF.",
+    subtitle: "Configure automated parking checkout, wallet, and linked accounts in RWF.",
     icon: "card-outline",
-    options: [
-      {
-        title: "MTN Mobile Money (*182#)",
-        desc: "+250 788 123 456 · Instant MoMo checkout",
-        badge: "PRIMARY",
-      },
-      {
-        title: "Airtel Money (*182#)",
-        desc: "+250 733 654 321 · Secondary backup channel",
-        badge: "LINKED",
-      },
-      {
-        title: "Visa / Mastercard Card",
-        desc: "Card ending in 4242 · Automatic billing",
-        badge: "LINKED",
-      },
-      {
-        title: "RRA Fiscal TIN Number",
-        desc: "TIN 102938475 for EBM corporate invoice generation",
-        action: "tin",
-      },
-    ],
+    fields: PAYMENT_FIELDS,
+    options: [],
     toggles: [
       {
         key: "auto_debit",
@@ -138,7 +114,7 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
   performance: {
     title: "Performance & Cache",
     subtitle: "Optimize map speed, caching, and battery consumption.",
-    icon: "speedometer-outline",
+    icon: "rocket-outline",
     toggles: [
       {
         key: "prefetch_lots",
@@ -179,7 +155,7 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
       },
       {
         label: "Reset App State & Reload",
-        desc: "Re-sync latest Kigali lot topology and sensor grid",
+        desc: "Re-sync latest lot topology and sensor grid from database",
         action: "reset_state",
       },
     ],
@@ -290,7 +266,7 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
       {
         key: "ev_done",
         label: "EV Charging Complete Notice",
-        desc: "SMS alert when battery hits 80% or 100% to avoid idle connector fees.",
+        desc: "Notification alert when battery hits target SoC or 100% full charge.",
         defaultVal: true,
       },
       {
@@ -384,25 +360,9 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
   },
   diagnostics: {
     title: "System & Sensor Diagnostics",
-    subtitle: "Monitor real-time connection to Kigali smart parking telemetry.",
+    subtitle: "Monitor real-time database connection to smart parking & EV telemetry.",
     icon: "hardware-chip-outline",
-    options: [
-      {
-        title: "City Smart Grid Connection",
-        desc: "Connected · 18ms latency to Kigali Central Node",
-        badge: "ONLINE",
-      },
-      {
-        title: "Ultrasonic Bay Sensor Mesh",
-        desc: "60 / 60 Sensors communicating via LoRaWAN",
-        badge: "99.98%",
-      },
-      {
-        title: "ANPR Plate Camera Relay",
-        desc: "Optical barriers operational at Kigali Heights",
-        badge: "READY",
-      },
-    ],
+    options: [],
     toggles: [
       {
         key: "debug_telemetry",
@@ -419,8 +379,8 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
     ],
     actions: [
       {
-        label: "Run Network Latency Ping Test",
-        desc: "Tests response time to Kigali parking backend",
+        label: "Run Database Latency Ping Test",
+        desc: "Measures live round-trip query time to cloud database",
         action: "ping_test",
       },
       {
@@ -447,7 +407,7 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
       },
       {
         title: "Revoke Location Permissions",
-        desc: "Turn off background GPS tracking in iOS settings",
+        desc: "Turn off background GPS tracking in device settings",
         action: "location_perm",
       },
       {
@@ -465,17 +425,17 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
   },
   help: {
     title: "Help & Dispatch Center",
-    subtitle: "Get assistance from Kigali parking marshals and dispatch operators.",
+    subtitle: "Get assistance from municipal parking marshals and dispatch operators.",
     icon: "help-buoy-outline",
     options: [
       {
         title: "Call Toll-Free Dispatch Hotline",
-        desc: "Toll-Free 3122 · 24/7 Operations across Kigali",
+        desc: "Toll-Free 3122 · 24/7 Operations",
         action: "call_hotline",
       },
       {
         title: "WhatsApp Motorist Support",
-        desc: "+250 788 123 456 · Instant chat with dispatch agent",
+        desc: "Official ParkZone Dispatch Channel · Instant chat support",
         action: "whatsapp",
       },
       {
@@ -485,7 +445,7 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
       },
       {
         title: "How to Pay via MTN MoMo / Airtel",
-        desc: "Step-by-step guide for manual *182# code payment",
+        desc: "Step-by-step guide for *182# merchant code payment",
         action: "momo_guide",
       },
       {
@@ -497,12 +457,12 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
   },
   about: {
     title: "About ParkZone",
-    subtitle: "Smart parking made simple across Kigali & Rwanda.",
+    subtitle: "Smart parking & EV charging across Rwanda.",
     icon: "information-circle-outline",
     options: [
       {
         title: "Version 2.4.0 (Build 2026.10)",
-        desc: "Production release with Kigali LoRaWAN sensor integration",
+        desc: "Production release with live cloud sync & OCPP 2.0.1 EV telemetry",
         badge: "LATEST",
       },
       {
@@ -522,7 +482,7 @@ const SETTINGS_REGISTRY: Record<string, SettingConfig> = {
       },
       {
         title: "Open-Source Acknowledgements",
-        desc: "React Native, Expo, Supabase, and SQLite licenses",
+        desc: "React Native, Expo, cloud runtime, and SQLite licenses",
         action: "oss",
       },
     ],
@@ -543,37 +503,606 @@ export default function Setting() {
     return initial;
   });
 
+  const [optionsCustomState, setOptionsCustomState] = useState<Record<string, string>>({});
+
+  const [formValues, setFormValues] = useState<Record<string, string>>({
+    full_name: "",
+    phone_number: "",
+    email: "",
+    emergency_contact: "",
+    rra_tin: "",
+  });
+
+  const [dbVehicles, setDbVehicles] = useState<RegisteredVehicle[]>([]);
+  const [dbPaymentMethods, setDbPaymentMethods] = useState<DbPaymentMethodRecord[]>([]);
+  const [walletBalanceRwf, setWalletBalanceRwf] = useState<number>(0);
+  const [diagnosticsStats, setDiagnosticsStats] = useState<{
+    connected: boolean;
+    latencyMs: number;
+    locationsCount: number;
+    spacesCount: number;
+    chargersCount: number;
+  }>({
+    connected: false,
+    latencyMs: 0,
+    locationsCount: 0,
+    spacesCount: 0,
+    chargersCount: 0,
+  });
+
+  // Custom Options Picker Modal State
+  const [pickerModalVisible, setPickerModalVisible] = useState(false);
+  const [pickerTitle, setPickerTitle] = useState("");
+  const [pickerSubtitle, setPickerSubtitle] = useState("");
+  const [pickerOptions, setPickerOptions] = useState<Array<{ label: string; value: string }>>([]);
+  const [pickerActiveKey, setPickerActiveKey] = useState<string>("");
+
+  // Change Password Modal State
+  const [passwordModalVisible, setPasswordModalVisible] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+
+  const [loadingData, setLoadingData] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+
+  const loadSettingData = useCallback(async () => {
+    setLoadingData(true);
+    try {
+      const startPing = Date.now();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      // 1. Load persisted toggles from AsyncStorage
+      try {
+        const savedToggles = await AsyncStorage.getItem(`@parkzone_toggles_${setting}`);
+        if (savedToggles) {
+          const parsed = JSON.parse(savedToggles);
+          setToggles((prev) => ({ ...prev, ...parsed }));
+        }
+      } catch (err) {
+        console.warn("Failed to load local toggles:", err);
+      }
+
+      // 2. Load persisted options from AsyncStorage
+      try {
+        const savedOptions = await AsyncStorage.getItem(`@parkzone_options_${setting}`);
+        if (savedOptions) {
+          const parsed = JSON.parse(savedOptions);
+          setOptionsCustomState(parsed);
+        }
+      } catch (err) {
+        console.warn("Failed to load local options:", err);
+      }
+
+      // 3. Load personal profile / payment information
+      if (setting === "personal" || setting === "payments") {
+        let loadedFromDb = false;
+        if (user?.id) {
+          try {
+            const { data: profile } = await supabase
+              .from("profiles")
+              .select("full_name, phone_number, email, emergency_contact, rra_tin")
+              .eq("id", user.id)
+              .maybeSingle();
+
+            if (profile) {
+              setFormValues({
+                full_name: profile.full_name || user.user_metadata?.full_name || "",
+                phone_number: profile.phone_number || user.phone || "",
+                email: profile.email || user.email || "",
+                emergency_contact: profile.emergency_contact || "",
+                rra_tin: profile.rra_tin || "",
+              });
+              loadedFromDb = true;
+            }
+          } catch {
+            // DB column not present, fallback
+          }
+        }
+
+        if (!loadedFromDb) {
+          try {
+            const cachedForm = await AsyncStorage.getItem(`@parkzone_form_${setting}`);
+            if (cachedForm) {
+              setFormValues((prev) => ({ ...prev, ...JSON.parse(cachedForm) }));
+            }
+          } catch {}
+        }
+      }
+
+      if (setting === "vehicles") {
+        if (user?.id) {
+          const list = await fetchUserVehicles(user.id);
+          setDbVehicles(list);
+        } else {
+          setDbVehicles([]);
+        }
+      }
+
+      if (setting === "payments") {
+        if (user?.id) {
+          const [methods, balance] = await Promise.all([
+            fetchUserPaymentMethods(user.id),
+            fetchWalletBalance(user.id),
+          ]);
+          setDbPaymentMethods(methods);
+          setWalletBalanceRwf(balance);
+        } else {
+          setDbPaymentMethods([]);
+          setWalletBalanceRwf(0);
+        }
+      }
+
+      if (setting === "diagnostics") {
+        const [locRes, spaceRes, chargerRes] = await Promise.all([
+          supabase.from("parking_locations").select("id", { count: "exact", head: true }),
+          supabase.from("parking_spaces").select("id", { count: "exact", head: true }),
+          supabase.from("ev_charging_points").select("id", { count: "exact", head: true }),
+        ]);
+        const latencyMs = Math.max(1, Date.now() - startPing);
+        setDiagnosticsStats({
+          connected: !locRes.error,
+          latencyMs,
+          locationsCount: locRes.count ?? 0,
+          spacesCount: spaceRes.count ?? 0,
+          chargersCount: chargerRes.count ?? 0,
+        });
+      }
+    } catch (e) {
+      console.warn("Failed to load setting data from database:", e);
+    } finally {
+      setLoadingData(false);
+    }
+  }, [setting]);
+
+  useEffect(() => {
+    loadSettingData();
+  }, [loadSettingData]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await new Promise((r) => setTimeout(r, 500));
+    await loadSettingData();
     setRefreshing(false);
   };
 
-  const handleToggle = (key: string, val: boolean) => {
-    setToggles((prev) => ({ ...prev, [key]: val }));
+  const handleToggle = async (key: string, val: boolean) => {
+    const updated = { ...toggles, [key]: val };
+    setToggles(updated);
+    try {
+      await AsyncStorage.setItem(`@parkzone_toggles_${setting}`, JSON.stringify(updated));
+    } catch (err) {
+      console.warn("Failed to persist toggle:", err);
+    }
   };
 
-  const handleSave = () => {
-    Alert.alert("Changes Saved", "Your settings preferences have been updated successfully.", [
-      { text: "OK", onPress: () => router.back() },
-    ]);
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      // Persist toggles locally
+      await AsyncStorage.setItem(`@parkzone_toggles_${setting}`, JSON.stringify(toggles));
+
+      // Persist options locally
+      await AsyncStorage.setItem(`@parkzone_options_${setting}`, JSON.stringify(optionsCustomState));
+
+      // Save form fields locally
+      await AsyncStorage.setItem(`@parkzone_form_${setting}`, JSON.stringify(formValues));
+
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id && (setting === "personal" || setting === "payments")) {
+        const payload: Record<string, any> = {
+          id: user.id,
+          updated_at: new Date().toISOString(),
+        };
+
+        if (setting === "personal") {
+          payload.full_name = formValues.full_name.trim() || null;
+          payload.phone_number = formValues.phone_number.trim() || null;
+          payload.email = formValues.email.trim() || user.email || null;
+          payload.emergency_contact = formValues.emergency_contact.trim() || null;
+
+          const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+          if (error) {
+            // Fallback for minimal DB schemas
+            await supabase.from("profiles").upsert({
+              id: user.id,
+              full_name: formValues.full_name.trim() || null,
+              phone_number: formValues.phone_number.trim() || null,
+              email: formValues.email.trim() || user.email || null,
+              updated_at: new Date().toISOString(),
+            }, { onConflict: "id" });
+          }
+
+          // Sync auth user metadata
+          try {
+            await supabase.auth.updateUser({
+              data: {
+                full_name: formValues.full_name.trim(),
+                phone_number: formValues.phone_number.trim(),
+              },
+            });
+          } catch {}
+        } else if (setting === "payments") {
+          payload.rra_tin = formValues.rra_tin.trim() || null;
+          await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+        }
+      }
+
+      Alert.alert("Settings Saved", "Your preferences and settings have been saved.");
+    } catch (e: any) {
+      console.warn("Settings save error:", e);
+      Alert.alert("Settings Updated", "Preferences saved on your device.");
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleAction = (action?: string) => {
+  const dynamicOptions = useMemo<SettingOption[]>(() => {
+    if (setting === "vehicles") {
+      const vehicleItems: SettingOption[] = dbVehicles.map((v) => ({
+        title: `${v.plate_number} · ${v.make_model || "Vehicle"}`,
+        desc:
+          v.vehicle_type === "ev"
+            ? "Electric Vehicle · EV Charging Eligible"
+            : v.vehicle_type === "handicap"
+            ? "Accessible Concession Vehicle"
+            : "Standard Registered Vehicle",
+        badge: v.is_default ? "PRIMARY" : v.vehicle_type === "ev" ? "EV" : "ACTIVE",
+        action: "manage_vehicles",
+      }));
+
+      if (vehicleItems.length === 0) {
+        vehicleItems.push({
+          title: "No Registered Vehicles",
+          desc: "Tap below to register your license plate in the database",
+          badge: "EMPTY",
+          action: "add_vehicle",
+        });
+      }
+
+      return [
+        ...vehicleItems,
+        {
+          title: "Add or Manage Vehicles",
+          desc: "Register plate number, powertrain, make & color",
+          action: "add_vehicle",
+        },
+        {
+          title: "3D Vehicle Customizer",
+          desc: "Edit live telemetry specs, battery capacity & finish",
+          action: "customizer",
+        },
+        {
+          title: "Municipal & Accessible Permits",
+          desc: "View or apply for parking concession permits",
+          action: "permit",
+        },
+      ];
+    }
+
+    if (setting === "payments") {
+      const channelItems: SettingOption[] = [
+        {
+          title: "ParkZone Digital Wallet",
+          desc: `Live Balance: ${walletBalanceRwf.toLocaleString()} RWF`,
+          badge: "WALLET",
+          action: "manage_payments",
+        },
+        ...dbPaymentMethods.map((m) => ({
+          title: m.provider_name,
+          desc: `${m.masked_identifier} · ${m.method_type.toUpperCase()} channel`,
+          badge: m.is_default ? "PRIMARY" : "LINKED",
+          action: "manage_payments",
+        })),
+      ];
+
+      if (dbPaymentMethods.length === 0) {
+        channelItems.push({
+          title: "No External Payment Channels Linked",
+          desc: "Link MTN MoMo, Airtel Money, or card in Wallet & Payments",
+          action: "manage_payments",
+        });
+      } else {
+        channelItems.push({
+          title: "Manage Wallet & Payment Channels",
+          desc: "Top up RWF balance or view wallet account",
+          action: "manage_payments",
+        });
+      }
+
+      return channelItems;
+    }
+
+    if (setting === "diagnostics") {
+      return [
+        {
+          title: "Cloud Database Connection",
+          desc: diagnosticsStats.connected
+            ? `Connected · ${diagnosticsStats.latencyMs} ms query round-trip`
+            : "Checking database connection...",
+          badge: diagnosticsStats.connected ? "ONLINE" : "SYNCING",
+        },
+        {
+          title: "Parking Facilities & Bay Sensors",
+          desc: `${diagnosticsStats.locationsCount} active hubs · ${diagnosticsStats.spacesCount} tracked bays in database`,
+          badge: `${diagnosticsStats.spacesCount} BAYS`,
+        },
+        {
+          title: "EV Charging OCPP Telemetry Nodes",
+          desc: `${diagnosticsStats.chargersCount} charging connectors registered in database`,
+          badge: `${diagnosticsStats.chargersCount} EVSE`,
+        },
+      ];
+    }
+
+    if (setting === "appearance") {
+      return [
+        {
+          title: "Light Mode",
+          desc: "Clean, high-contrast monochrome light theme",
+          badge: theme.themePreference === "light" ? "ACTIVE" : undefined,
+          action: "theme_light",
+        },
+        {
+          title: "Dark Mode",
+          desc: "Deep carbon black theme for night driving",
+          badge: theme.themePreference === "dark" ? "ACTIVE" : undefined,
+          action: "theme_dark",
+        },
+        {
+          title: "System Default",
+          desc: "Automatically match your phone's OS theme",
+          badge: theme.themePreference === "system" ? "ACTIVE" : undefined,
+          action: "theme_system",
+        },
+      ];
+    }
+
+    if (setting === "language") {
+      return [
+        {
+          title: "Language",
+          desc: optionsCustomState.lang || "English (Default)",
+          badge: optionsCustomState.lang ? "SELECTED" : "DEFAULT",
+          action: "lang",
+        },
+        {
+          title: "Country & Region",
+          desc: optionsCustomState.region || "Rwanda (Kigali Time, GMT+2)",
+          action: "region",
+        },
+        {
+          title: "Billing Currency",
+          desc: optionsCustomState.currency || "Rwandan Franc (RWF)",
+          badge: optionsCustomState.currency ? optionsCustomState.currency.split(" ")[0] : "RWF",
+          action: "currency",
+        },
+        {
+          title: "Distance Measurement",
+          desc: optionsCustomState.units || "Metric System (Meters & Kilometers)",
+          action: "units",
+        },
+        {
+          title: "Date & Time Format",
+          desc: optionsCustomState.date_format || "24-Hour Clock · DD/MM/YYYY",
+          action: "date_format",
+        },
+      ];
+    }
+
+    if (setting === "navigation") {
+      return [
+        {
+          title: "Preferred Navigation App",
+          desc: optionsCustomState.select_nav || "In-App Navigation (Default)",
+          badge: optionsCustomState.select_nav ? "SAVED" : undefined,
+          action: "select_nav",
+        },
+        {
+          title: "Search Radius",
+          desc: optionsCustomState.select_radius || "Current: 5 Kilometers around vehicle",
+          badge: optionsCustomState.select_radius ? "SAVED" : undefined,
+          action: "select_radius",
+        },
+      ];
+    }
+
+    if (setting === "security") {
+      return [
+        {
+          title: "Change Account Password",
+          desc: "Update your ParkZone login password",
+          action: "change_pw",
+        },
+        {
+          title: "Session Auto-Lock Timer",
+          desc: optionsCustomState.autolock || "Current: Lock after 5 minutes of inactivity",
+          badge: optionsCustomState.autolock ? "SAVED" : undefined,
+          action: "autolock",
+        },
+      ];
+    }
+
+    return item.options || [];
+  }, [
+    setting,
+    dbVehicles,
+    dbPaymentMethods,
+    walletBalanceRwf,
+    diagnosticsStats,
+    optionsCustomState,
+    theme.themePreference,
+    item.options,
+  ]);
+
+  const openPicker = (
+    title: string,
+    subtitle: string,
+    key: string,
+    options: Array<{ label: string; value: string }>
+  ) => {
+    setPickerTitle(title);
+    setPickerSubtitle(subtitle);
+    setPickerActiveKey(key);
+    setPickerOptions(options);
+    setPickerModalVisible(true);
+  };
+
+  const handleSelectPickerOption = async (val: string) => {
+    const next = { ...optionsCustomState, [pickerActiveKey]: val };
+    setOptionsCustomState(next);
+    setPickerModalVisible(false);
+    try {
+      await AsyncStorage.setItem(`@parkzone_options_${setting}`, JSON.stringify(next));
+    } catch {}
+    Alert.alert("Preference Updated", `${pickerTitle} set to: ${val}`);
+  };
+
+  const handleUpdatePassword = async () => {
+    if (!newPassword || newPassword.length < 6) {
+      Alert.alert("Password Too Short", "Password must be at least 6 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      Alert.alert("Mismatch", "New password and confirmation do not match.");
+      return;
+    }
+
+    setIsUpdatingPassword(true);
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword });
+      if (error) throw error;
+      setPasswordModalVisible(false);
+      setNewPassword("");
+      setConfirmPassword("");
+      Alert.alert("Password Updated", "Your account password has been updated successfully.");
+    } catch (err: any) {
+      Alert.alert("Error", err.message || "Failed to update password.");
+    } finally {
+      setIsUpdatingPassword(false);
+    }
+  };
+
+  const handleAction = async (action?: string) => {
     if (!action) return;
 
     switch (action) {
+      case "add_vehicle":
+      case "manage_vehicles":
+        router.push("/(tabs)/vehicles");
+        break;
+
+      case "customizer":
+        router.push("/settings/vehicle_customizer");
+        break;
+
+      case "permit":
+        router.push("/(tabs)/permits");
+        break;
+
+      case "manage_payments":
+        router.push("/(tabs)/payments");
+        break;
+
+      case "theme_light":
+        theme.setThemePreference("light");
+        Alert.alert("Appearance Updated", "Light mode is now active.");
+        break;
+
+      case "theme_dark":
+        theme.setThemePreference("dark");
+        Alert.alert("Appearance Updated", "Dark mode is now active.");
+        break;
+
+      case "theme_system":
+        theme.setThemePreference("system");
+        Alert.alert("Appearance Updated", "System appearance matching is now active.");
+        break;
+
+      case "lang":
+        openPicker("Select Language", "Choose your preferred language for the interface", "lang", [
+          { label: "English (Default)", value: "English (Default)" },
+          { label: "Kinyarwanda", value: "Kinyarwanda" },
+          { label: "Français (French)", value: "Français (French)" },
+          { label: "Kiswahili", value: "Kiswahili" },
+        ]);
+        break;
+
+      case "region":
+        openPicker("Country & Region", "Select your country and regional regulatory jurisdiction", "region", [
+          { label: "Rwanda (Kigali Time, GMT+2)", value: "Rwanda (Kigali Time, GMT+2)" },
+          { label: "Uganda (Kampala, GMT+3)", value: "Uganda (Kampala, GMT+3)" },
+          { label: "Kenya (Nairobi, GMT+3)", value: "Kenya (Nairobi, GMT+3)" },
+          { label: "Tanzania (Dodoma, GMT+3)", value: "Tanzania (Dodoma, GMT+3)" },
+        ]);
+        break;
+
+      case "currency":
+        openPicker("Billing Currency", "Select default currency for receipts & estimates", "currency", [
+          { label: "Rwandan Franc (RWF)", value: "Rwandan Franc (RWF)" },
+          { label: "US Dollar (USD)", value: "US Dollar (USD)" },
+          { label: "Euro (EUR)", value: "Euro (EUR)" },
+        ]);
+        break;
+
+      case "units":
+        openPicker("Distance Measurement", "Select units for bay routing & radius", "units", [
+          { label: "Metric System (Meters & Kilometers)", value: "Metric System (Meters & Kilometers)" },
+          { label: "Imperial System (Miles & Feet)", value: "Imperial System (Miles & Feet)" },
+        ]);
+        break;
+
+      case "date_format":
+        openPicker("Date & Time Format", "Select display style for timestamps & booking hours", "date_format", [
+          { label: "24-Hour Clock · DD/MM/YYYY", value: "24-Hour Clock · DD/MM/YYYY" },
+          { label: "12-Hour Clock · MM/DD/YYYY", value: "12-Hour Clock · MM/DD/YYYY" },
+        ]);
+        break;
+
+      case "select_nav":
+        openPicker("Preferred Navigation App", "Select the turn-by-turn navigation engine", "select_nav", [
+          { label: "In-App Navigation (Default)", value: "In-App Navigation (Default)" },
+          { label: "Google Maps", value: "Google Maps" },
+          { label: "Apple Maps", value: "Apple Maps" },
+          { label: "Waze Live Traffic", value: "Waze Live Traffic" },
+        ]);
+        break;
+
+      case "select_radius":
+        openPicker("Search Radius", "Filter nearest lots and EV chargers within radius", "select_radius", [
+          { label: "2 Kilometers (City Center)", value: "2 Kilometers (City Center)" },
+          { label: "5 Kilometers (Standard Radius)", value: "5 Kilometers (Standard Radius)" },
+          { label: "10 Kilometers (Greater Kigali)", value: "10 Kilometers (Greater Kigali)" },
+          { label: "25 Kilometers (Province Metropolitan)", value: "25 Kilometers (Province Metropolitan)" },
+        ]);
+        break;
+
+      case "autolock":
+        openPicker("Session Auto-Lock Timer", "Lock app after inactivity to protect account security", "autolock", [
+          { label: "Immediate on Background", value: "Immediate on Background" },
+          { label: "After 1 Minute", value: "After 1 Minute" },
+          { label: "After 5 Minutes (Default)", value: "After 5 Minutes (Default)" },
+          { label: "After 15 Minutes", value: "After 15 Minutes" },
+          { label: "Never (Stay Unlocked)", value: "Never (Stay Unlocked)" },
+        ]);
+        break;
+
+      case "change_pw":
+        setPasswordModalVisible(true);
+        break;
+
       case "clear_cache":
         Alert.alert(
           "Clear Offline Map Cache",
-          "This will remove locally cached map tiles, telemetry traces, and lot geometry. Active parking sessions will remain intact.",
+          "This will refresh cached telemetry state from the database. Active parking sessions will remain intact.",
           [
             { text: "Cancel", style: "cancel" },
             {
               text: "Clear Now",
-              onPress: () => Alert.alert("Cache Cleared", "Freed 48.2 MB of local storage."),
+              onPress: async () => {
+                await loadSettingData();
+                Alert.alert("Cache Refreshed", "Local cache cleared and state synced from database.");
+              },
             },
           ]
         );
@@ -582,47 +1111,56 @@ export default function Setting() {
       case "reset_state":
         Alert.alert(
           "Reset App State",
-          "Re-download latest parking lot coordinates and sensor configurations from Kigali backend?",
+          "Re-download latest parking lot coordinates and sensor configurations from database?",
           [
             { text: "Cancel", style: "cancel" },
             {
               text: "Re-Sync",
-              onPress: () => Alert.alert("Synchronized", "All sensor nodes updated."),
+              onPress: async () => {
+                await loadSettingData();
+                Alert.alert("Synchronized", "Database telemetry synchronized.");
+              },
             },
           ]
         );
         break;
 
-      case "ping_test":
+      case "ping_test": {
+        const t0 = Date.now();
+        const { error } = await supabase.from("parking_locations").select("id").limit(1);
+        const rtt = Math.max(1, Date.now() - t0);
         Alert.alert(
-          "Network Latency Diagnostic",
-          "Pinging Kigali Municipal Node (kgl-gw-01.parkzone.rw)...\n\nRound trip: 18 ms\nPacket loss: 0.0%\nProtocol: Secure MQTT / TLS 1.3\nSignal: Excellent (4G / 5G LTE)"
+          "Database Latency Diagnostic",
+          error
+            ? `Database error: ${error.message}`
+            : `Live Database Query Ping:\n\nRound trip: ${rtt} ms\nStatus: Connected (TLS 1.3)`
         );
         break;
+      }
 
       case "report_sensor":
         Alert.alert(
           "Report Sensor Malfunction",
-          "Enter bay identifier (e.g. Spot A-15 at Central Metro Park):",
+          "Submit a sensor inspection request for your current parking facility?",
           [
             { text: "Cancel", style: "cancel" },
             {
               text: "Submit Report",
               onPress: () =>
-                Alert.alert("Report Dispatched", "Marshall inspection ticket created. Thank you!"),
+                Alert.alert("Report Dispatched", "Marshal inspection request recorded. Thank you!"),
             },
           ]
         );
         break;
 
       case "call_hotline":
-        Alert.alert("Call Dispatch", "Dialing Kigali Parking Authority Hotline: 3122 (Toll-Free)");
+        Alert.alert("Call Dispatch", "Dialing Municipal Parking Authority Hotline: 3122 (Toll-Free)");
         break;
 
       case "whatsapp":
         Alert.alert(
           "WhatsApp Motorist Support",
-          "Opening WhatsApp chat with City of Kigali Parking Assistance (+250 788 123 456)..."
+          "Contact ParkZone Dispatch via official motorist support channel."
         );
         break;
 
@@ -636,7 +1174,7 @@ export default function Setting() {
       case "momo_guide":
         Alert.alert(
           "Mobile Money Payment Guide",
-          "1. Dial *182# on MTN or Airtel\n2. Select Pay Bill / Irembo / Merchant\n3. Enter Merchant Code: 890123 (ParkZone)\n4. Enter Amount in RWF\n5. Input PIN to confirm"
+          "1. Dial *182# on MTN or Airtel\n2. Select Pay Bill / Merchant\n3. Follow the prompt on your ParkZone invoice\n4. Confirm amount in RWF"
         );
         break;
 
@@ -652,14 +1190,14 @@ export default function Setting() {
       case "delete_account":
         Alert.alert(
           "Delete Account",
-          "Are you sure you want to permanently delete your ParkZone motorist profile? All saved vehicles, wallet balance, and parking history will be wiped immediately.",
+          "Are you sure you want to sign out and request permanent deletion of your ParkZone motorist profile?",
           [
             { text: "Cancel", style: "cancel" },
             {
-              text: "Delete Permanently",
+              text: "Sign Out & Request",
               style: "destructive",
-              onPress: () => {
-                Alert.alert("Account Deleted", "Your account has been deleted.");
+              onPress: async () => {
+                await supabase.auth.signOut();
                 router.replace("/(auth)/sign_in");
               },
             },
@@ -668,7 +1206,7 @@ export default function Setting() {
         break;
 
       default:
-        Alert.alert(item.title, `Configured setting: ${action}`);
+        Alert.alert(item.title, `Selected option: ${action}`);
     }
   };
 
@@ -713,18 +1251,29 @@ export default function Setting() {
           </Text>
         </View>
 
+        {loadingData && (
+          <View style={{ gap: 10, marginVertical: 10 }}>
+            <SkeletonBox width="100%" height={56} borderRadius={14} />
+            <SkeletonBox width="100%" height={56} borderRadius={14} />
+            <SkeletonBox width="100%" height={56} borderRadius={14} />
+          </View>
+        )}
+
         {/* Input Fields (if any) */}
         {item.fields && item.fields.length > 0 && (
           <View style={styles.sectionWrapper}>
             <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>
               PROFILE INFORMATION
             </Text>
-            {item.fields.map(([label, value, placeholder]) => (
-              <View key={label} style={styles.fieldBox}>
-                <Text style={[styles.fieldLabel, { color: theme.text }]}>{label}</Text>
+            {item.fields.map((field) => (
+              <View key={field.key} style={styles.fieldBox}>
+                <Text style={[styles.fieldLabel, { color: theme.text }]}>{field.label}</Text>
                 <TextInput
-                  defaultValue={value}
-                  placeholder={placeholder || label}
+                  value={formValues[field.key] ?? ""}
+                  onChangeText={(val) =>
+                    setFormValues((prev) => ({ ...prev, [field.key]: val }))
+                  }
+                  placeholder={field.placeholder || field.label}
                   placeholderTextColor={theme.textMuted}
                   style={[
                     styles.input,
@@ -780,14 +1329,14 @@ export default function Setting() {
         )}
 
         {/* Option Rows (if any) */}
-        {item.options && item.options.length > 0 && (
+        {dynamicOptions.length > 0 && (
           <View style={styles.sectionWrapper}>
             <Text style={[styles.sectionHeading, { color: theme.textSecondary }]}>
               OPTIONS & INTEGRATIONS
             </Text>
-            {item.options.map((opt) => (
+            {dynamicOptions.map((opt) => (
               <TouchableOpacity
-                key={opt.title}
+                key={`${opt.title}-${opt.badge || ""}`}
                 style={[
                   styles.optionCard,
                   {
@@ -869,21 +1418,166 @@ export default function Setting() {
           </View>
         )}
 
-        {/* Save Changes Button (if fields are editable) */}
-        {item.fields && item.fields.length > 0 && (
+        {/* Save Changes / Preferences Button */}
+        {(Boolean(item.fields?.length) || Boolean(item.toggles?.length) || dynamicOptions.length > 0) && (
           <TouchableOpacity
-            style={[styles.saveBtn, { backgroundColor: theme.primaryBtnBg }]}
+            style={[styles.saveBtn, { backgroundColor: theme.primaryBtnBg, opacity: saving ? 0.7 : 1 }]}
             onPress={handleSave}
+            disabled={saving}
             activeOpacity={0.88}
           >
-            <Text style={[styles.saveBtnText, { color: theme.primaryBtnText }]}>
-              Save Changes
-            </Text>
+            {saving ? (
+              <ActivityIndicator size="small" color={theme.primaryBtnText} />
+            ) : (
+              <View style={styles.saveBtnContentRow}>
+                <Ionicons
+                  name="checkmark-circle-outline"
+                  size={18}
+                  color={theme.primaryBtnText}
+                  style={{ marginRight: 8 }}
+                />
+                <Text style={[styles.saveBtnText, { color: theme.primaryBtnText }]}>
+                  Save Settings & Preferences
+                </Text>
+              </View>
+            )}
           </TouchableOpacity>
         )}
 
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Interactive Options Picker Modal */}
+      <Modal
+        visible={pickerModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPickerModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={[styles.modalHandle, { backgroundColor: theme.border }]} />
+            <Text style={[styles.modalTitle, { color: theme.text }]}>{pickerTitle}</Text>
+            {pickerSubtitle ? (
+              <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>{pickerSubtitle}</Text>
+            ) : null}
+
+            <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+              {pickerOptions.map((opt) => {
+                const isSelected = optionsCustomState[pickerActiveKey] === opt.value;
+                return (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[
+                      styles.pickerItemRow,
+                      {
+                        backgroundColor: isSelected ? theme.border : theme.background,
+                        borderColor: isSelected ? theme.text : theme.border,
+                      },
+                    ]}
+                    onPress={() => handleSelectPickerOption(opt.value)}
+                    activeOpacity={0.8}
+                  >
+                    <Text
+                      style={[
+                        styles.pickerItemText,
+                        { color: theme.text, fontWeight: isSelected ? "600" : "400" },
+                      ]}
+                    >
+                      {opt.label}
+                    </Text>
+                    {isSelected && (
+                      <Ionicons name="checkmark-circle" size={18} color={theme.text} />
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+
+            <TouchableOpacity
+              style={[styles.modalCancelBtn, { backgroundColor: theme.border }]}
+              onPress={() => setPickerModalVisible(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.modalCancelBtnText, { color: theme.text }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Change Password Modal */}
+      <Modal
+        visible={passwordModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPasswordModalVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={[styles.modalHandle, { backgroundColor: theme.border }]} />
+            <Text style={[styles.modalTitle, { color: theme.text }]}>Change Account Password</Text>
+            <Text style={[styles.modalSubtitle, { color: theme.textSecondary }]}>
+              Enter a new secure password for your ParkZone motorist profile
+            </Text>
+
+            <View style={{ marginBottom: 14 }}>
+              <Text style={[styles.fieldLabel, { color: theme.text }]}>New Password</Text>
+              <TextInput
+                value={newPassword}
+                onChangeText={setNewPassword}
+                placeholder="At least 6 characters"
+                placeholderTextColor={theme.textMuted}
+                secureTextEntry
+                style={[
+                  styles.input,
+                  { backgroundColor: theme.background, borderColor: theme.border, color: theme.text },
+                ]}
+              />
+            </View>
+
+            <View style={{ marginBottom: 16 }}>
+              <Text style={[styles.fieldLabel, { color: theme.text }]}>Confirm New Password</Text>
+              <TextInput
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                placeholder="Re-enter password"
+                placeholderTextColor={theme.textMuted}
+                secureTextEntry
+                style={[
+                  styles.input,
+                  { backgroundColor: theme.background, borderColor: theme.border, color: theme.text },
+                ]}
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.saveBtn,
+                { backgroundColor: theme.primaryBtnBg, opacity: isUpdatingPassword ? 0.7 : 1, marginBottom: 10 },
+              ]}
+              onPress={handleUpdatePassword}
+              disabled={isUpdatingPassword}
+              activeOpacity={0.88}
+            >
+              {isUpdatingPassword ? (
+                <ActivityIndicator size="small" color={theme.primaryBtnText} />
+              ) : (
+                <Text style={[styles.saveBtnText, { color: theme.primaryBtnText }]}>
+                  Update Password
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.modalCancelBtn, { backgroundColor: theme.border }]}
+              onPress={() => setPasswordModalVisible(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.modalCancelBtnText, { color: theme.text }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -911,7 +1605,7 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   content: {
@@ -939,14 +1633,14 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 12,
     lineHeight: 18,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   sectionWrapper: {
     marginBottom: 20,
   },
   sectionHeading: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.8,
     marginBottom: 10,
     marginLeft: 4,
@@ -956,7 +1650,7 @@ const styles = StyleSheet.create({
   },
   fieldLabel: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
     marginBottom: 6,
     marginLeft: 2,
   },
@@ -966,7 +1660,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 14,
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   toggleCard: {
     borderRadius: 16,
@@ -983,7 +1677,7 @@ const styles = StyleSheet.create({
   },
   toggleLabel: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   toggleDesc: {
     fontSize: 11,
@@ -1001,7 +1695,7 @@ const styles = StyleSheet.create({
   },
   optionTitle: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   optionDesc: {
     fontSize: 11,
@@ -1016,7 +1710,7 @@ const styles = StyleSheet.create({
   },
   badgeText: {
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.5,
   },
   actionCard: {
@@ -1030,7 +1724,7 @@ const styles = StyleSheet.create({
   },
   actionLabel: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   actionDesc: {
     fontSize: 11,
@@ -1044,9 +1738,69 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 10,
   },
+  saveBtnContentRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   saveBtnText: {
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 0.3,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderTopWidth: 1,
+    padding: 24,
+    paddingBottom: Platform.OS === "ios" ? 40 : 24,
+  },
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: "center",
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  modalSubtitle: {
+    fontSize: 12,
+    fontWeight: "400",
+    marginBottom: 16,
+    lineHeight: 18,
+  },
+  pickerItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    height: 52,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  pickerItemText: {
+    fontSize: 14,
+  },
+  modalCancelBtn: {
+    height: 48,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  modalCancelBtnText: {
+    fontSize: 14,
+    fontWeight: "500",
   },
 });

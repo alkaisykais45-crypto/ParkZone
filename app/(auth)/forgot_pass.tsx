@@ -263,7 +263,7 @@ export default function ForgotPassword() {
 
               <TextInput
                 style={[styles.textInput, { color: theme.text }]}
-                placeholder="0788 123 456 or email"
+                placeholder="Email address or phone number"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
                 keyboardType="email-address"
@@ -429,7 +429,7 @@ const styles = StyleSheet.create({
   },
   mainHeading: {
     fontSize: 32,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.6,
     marginBottom: 8,
   },
@@ -439,7 +439,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
   },
   faqLink: {
-    fontWeight: "700",
+    fontWeight: "500",
     textDecorationLine: "underline",
   },
   errorBanner: {
@@ -453,7 +453,7 @@ const styles = StyleSheet.create({
   errorBannerText: {
     color: "#EF4444",
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
     flex: 1,
   },
   inputPill: {
@@ -475,7 +475,7 @@ const styles = StyleSheet.create({
   },
   flagCodeText: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   inputDivider: {
     width: 1,
@@ -485,7 +485,7 @@ const styles = StyleSheet.create({
   textInput: {
     flex: 1,
     fontSize: 14.5,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   primaryBtn: {
     height: 56,
@@ -499,7 +499,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 1,
   },
   footerRow: {
@@ -508,10 +508,10 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   footerLinkBold: {
-    fontWeight: "800",
+    fontWeight: "600",
     textDecorationLine: "underline",
   },
 
@@ -535,7 +535,7 @@ const styles = StyleSheet.create({
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   modalSub: {
     fontSize: 13,
@@ -545,7 +545,7 @@ const styles = StyleSheet.create({
   modalErrorText: {
     color: "#EF4444",
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
     marginBottom: 12,
   },
   otpBoxesRow: {
@@ -560,7 +560,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     textAlign: "center",
     fontSize: 20,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   modalPrimaryBtn: {
     height: 52,
@@ -570,7 +570,7 @@ const styles = StyleSheet.create({
   },
   modalPrimaryBtnText: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 0.8,
   },
   resendBtn: {
@@ -579,6 +579,6 @@ const styles = StyleSheet.create({
   },
   resendText: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
   },
 });

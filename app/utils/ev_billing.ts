@@ -2,7 +2,6 @@
 
 // Definiton of EV Billing Structure
 
-
 type EvBilling = {
     energyCost: number;
     taxAmount: number;
@@ -183,6 +182,11 @@ const spendingAlerts = (energySpendings: number, parkingSpendings: number, perio
 
 
 export { calculateEvBilling, calculateEnergySpendings, calculateParkingSpendings, spendingAlerts };
+
+export default function () {
+    return null;
+}
+
 
 
 

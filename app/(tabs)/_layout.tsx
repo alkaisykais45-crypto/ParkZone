@@ -165,7 +165,7 @@ function FloatingCompactTabBar({
               <Text
                 style={{
                   fontSize: 9,
-                  fontWeight: isFocused ? "700" : "500",
+                  fontWeight: isFocused ? "600" : "400",
                   color,
                   marginTop: 1,
                   letterSpacing: -0.2,

@@ -89,12 +89,12 @@ export const MAP_STYLE_LIGHT = [
   {
     featureType: "water",
     elementType: "geometry",
-    stylers: [{ color: "#E0F2FE" }],
+    stylers: [{ color: "#E4E4E7" }],
   },
   {
     featureType: "water",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#94A3B8" }],
+    stylers: [{ color: "#A1A1AA" }],
   },
 ];
 

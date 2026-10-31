@@ -4,6 +4,7 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -16,14 +17,22 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Icons } from "../../constants/icons";
-import { NumberLimit, email_regex, empty_field, password_regex } from "../lib/auth";
-import { checkUserExists, signUp } from "../services/auth";
+import { NumberLimit, email_regex, password_regex } from "../lib/auth";
+import {
+  checkUserExists,
+  ensureUserProfile,
+  resendSignupOtp,
+  signInWithOAuthProvider,
+  signUp,
+  verifyEmailSignupOtp,
+} from "../services/auth";
 import { GlassBackground } from "../../components/GlassBackground";
 import { useTheme } from "../../hooks/useTheme";
 
 export default function SignUp() {
   const theme = useTheme();
 
+  const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phoneNumber, setPhoneNumber] = useState("");
   const [password, setPassword] = useState("");
@@ -32,15 +41,23 @@ export default function SignUp() {
   const [secureText, setSecureText] = useState(true);
   const [secureConfirm, setSecureConfirm] = useState(true);
   const [isSigningUp, setIsSigningUp] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const [isNameFocused, setIsNameFocused] = useState(false);
   const [isEmailFocused, setIsEmailFocused] = useState(false);
   const [isPhoneFocused, setIsPhoneFocused] = useState(false);
   const [isPassFocused, setIsPassFocused] = useState(false);
   const [isConfirmFocused, setIsConfirmFocused] = useState(false);
 
+  // Email verification modal if Supabase requires email OTP confirmation
+  const [verifyModalVisible, setVerifyModalVisible] = useState(false);
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
   const handleSignUp = async () => {
-    if (!email.trim() || !phoneNumber.trim() || !password || !confirmPassword) {
+    if (!fullName.trim() || !email.trim() || !phoneNumber.trim() || !password || !confirmPassword) {
       setErrorMessage("Please fill in all fields to create your account.");
       return;
     }
@@ -78,8 +95,15 @@ export default function SignUp() {
 
     try {
       await checkUserExists(phoneNumber);
-      await signUp(email, password, phoneNumber);
-      router.push("/(auth)/succesfully");
+      const result = await signUp(email, password, phoneNumber, fullName);
+
+      if (result.requiresEmailConfirmation) {
+        setVerifyError(null);
+        setVerifyCode("");
+        setVerifyModalVisible(true);
+      } else {
+        router.replace("/(auth)/succesfully");
+      }
     } catch (error) {
       const message =
         error instanceof Error
@@ -91,8 +115,45 @@ export default function SignUp() {
     }
   };
 
-  const handleDemoSignIn = () => {
-    router.replace("/(tabs)/home");
+  const handleVerifySignupCode = async () => {
+    if (verifyCode.trim().length < 6) {
+      setVerifyError("Please enter the 6-digit verification code sent to your email.");
+      return;
+    }
+    setVerifyLoading(true);
+    setVerifyError(null);
+    try {
+      const data = await verifyEmailSignupOtp(email, verifyCode);
+      if (data?.user) {
+        await ensureUserProfile(data.user, {
+          email,
+          phoneNumber,
+          fullName,
+        });
+      }
+      setVerifyModalVisible(false);
+      router.replace("/(auth)/succesfully");
+    } catch (e: any) {
+      setVerifyError(e?.message || "Invalid or expired verification code.");
+    } finally {
+      setVerifyLoading(false);
+    }
+  };
+
+  const handleOAuthSignUp = async (provider: "google" | "apple") => {
+    setOauthLoading(provider);
+    setErrorMessage(null);
+    try {
+      await signInWithOAuthProvider(provider);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : `Could not sign up with ${provider === "google" ? "Google" : "Apple"}.`;
+      setErrorMessage(message);
+    } finally {
+      setOauthLoading(null);
+    }
   };
 
   return (
@@ -124,19 +185,19 @@ export default function SignUp() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Header section matching reference */}
+            {/* Header section */}
             <View style={styles.headerSection}>
               <Text style={[styles.mainHeading, { color: theme.text }]}>
                 Create Account
               </Text>
               <Text style={[styles.subHeading, { color: theme.textSecondary }]}>
-                Join Kigali smart urban grid for seamless automated parking.{" "}
+                Register your motorist profile for smart parking & EV charging.{" "}
                 <Text
                   style={[styles.faqLink, { color: theme.text }]}
                   onPress={() =>
                     Alert.alert(
                       "ParkZone Registration",
-                      "Creating an account links your license plate to automated barrier check-in and cashless MoMo payments."
+                      "Creating an account links your vehicles to automated parking check-in, EV charging telemetry, and cashless payments."
                     )
                   }
                 >
@@ -160,6 +221,44 @@ export default function SignUp() {
                 <Text style={styles.errorBannerText}>{errorMessage}</Text>
               </View>
             )}
+
+            {/* Input 0: Full Name */}
+            <View
+              style={[
+                styles.inputPill,
+                {
+                  backgroundColor: theme.isDark ? "rgba(255, 255, 255, 0.05)" : "rgba(0, 0, 0, 0.03)",
+                  borderColor: isNameFocused
+                    ? theme.isDark
+                      ? "#FFFFFF"
+                      : "#09090B"
+                    : theme.isDark
+                    ? "rgba(255, 255, 255, 0.14)"
+                    : "rgba(0, 0, 0, 0.12)",
+                  marginBottom: 14,
+                },
+              ]}
+            >
+              <Ionicons
+                name="person-outline"
+                size={20}
+                color={isNameFocused ? theme.text : theme.textMuted}
+                style={styles.inputLeftIcon}
+              />
+              <TextInput
+                style={[styles.textInput, { color: theme.text }]}
+                placeholder="Full Name"
+                placeholderTextColor={theme.textMuted}
+                autoCapitalize="words"
+                value={fullName}
+                onFocus={() => setIsNameFocused(true)}
+                onBlur={() => setIsNameFocused(false)}
+                onChangeText={(text) => {
+                  setFullName(text);
+                  setErrorMessage(null);
+                }}
+              />
+            </View>
 
             {/* Input 1: Email Address */}
             <View
@@ -188,6 +287,7 @@ export default function SignUp() {
                 placeholder="Email Address"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
+                autoCorrect={false}
                 keyboardType="email-address"
                 value={email}
                 onFocus={() => setIsEmailFocused(true)}
@@ -233,7 +333,7 @@ export default function SignUp() {
 
               <TextInput
                 style={[styles.textInput, { color: theme.text }]}
-                placeholder="0788 123 456"
+                placeholder="Phone number"
                 placeholderTextColor={theme.textMuted}
                 keyboardType="phone-pad"
                 value={phoneNumber}
@@ -403,7 +503,7 @@ export default function SignUp() {
                 },
               ]}
               onPress={handleSignUp}
-              disabled={isSigningUp}
+              disabled={isSigningUp || oauthLoading !== null}
               activeOpacity={0.88}
             >
               {isSigningUp ? (
@@ -422,7 +522,7 @@ export default function SignUp() {
               <View style={[styles.orDividerLine, { backgroundColor: theme.border }]} />
             </View>
 
-            {/* Social Sign Up Pills */}
+            {/* OAuth Sign Up Pills */}
             <TouchableOpacity
               style={[
                 styles.socialPillBtn,
@@ -431,15 +531,22 @@ export default function SignUp() {
                   borderColor: theme.border,
                 },
               ]}
-              onPress={handleDemoSignIn}
+              onPress={() => handleOAuthSignUp("google")}
+              disabled={isSigningUp || oauthLoading !== null}
               activeOpacity={0.8}
             >
-              <Image
-                source={Icons.googleIcon}
-                style={{ width: 19, height: 19, marginRight: 10 }}
-                resizeMode="contain"
-              />
-              <Text style={[styles.socialPillText, { color: theme.text }]}>Sign up with Google</Text>
+              {oauthLoading === "google" ? (
+                <ActivityIndicator size="small" color={theme.text} />
+              ) : (
+                <>
+                  <Image
+                    source={Icons.googleIcon}
+                    style={{ width: 19, height: 19, marginRight: 10 }}
+                    resizeMode="contain"
+                  />
+                  <Text style={[styles.socialPillText, { color: theme.text }]}>Sign up with Google</Text>
+                </>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -451,11 +558,18 @@ export default function SignUp() {
                   marginTop: 12,
                 },
               ]}
-              onPress={handleDemoSignIn}
+              onPress={() => handleOAuthSignUp("apple")}
+              disabled={isSigningUp || oauthLoading !== null}
               activeOpacity={0.8}
             >
-              <Ionicons name="logo-apple" size={20} color={theme.text} style={{ marginRight: 10 }} />
-              <Text style={[styles.socialPillText, { color: theme.text }]}>Sign up with Apple</Text>
+              {oauthLoading === "apple" ? (
+                <ActivityIndicator size="small" color={theme.text} />
+              ) : (
+                <>
+                  <Ionicons name="logo-apple" size={20} color={theme.text} style={{ marginRight: 10 }} />
+                  <Text style={[styles.socialPillText, { color: theme.text }]}>Sign up with Apple</Text>
+                </>
+              )}
             </TouchableOpacity>
 
             {/* Footer Row: Already have an account? Sign In */}
@@ -472,6 +586,104 @@ export default function SignUp() {
             </View>
           </ScrollView>
         </KeyboardAvoidingView>
+
+        {/* Email OTP Confirmation Modal */}
+        <Modal
+          visible={verifyModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setVerifyModalVisible(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "center", padding: 24 }}>
+            <View
+              style={{
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
+                borderWidth: 1,
+                borderRadius: 24,
+                padding: 22,
+              }}
+            >
+              <Text style={{ fontSize: 19, fontWeight: "600", color: theme.text, marginBottom: 6 }}>
+                Verify Your Email
+              </Text>
+              <Text style={{ fontSize: 13, color: theme.textSecondary, lineHeight: 19, marginBottom: 16 }}>
+                We sent a confirmation email to {email.trim().toLowerCase()}. Enter the 6-digit code below (or click the confirmation link in your email, then Sign In).
+              </Text>
+
+              {verifyError ? (
+                <Text style={{ color: "#EF4444", fontSize: 12, fontWeight: "500", marginBottom: 10 }}>
+                  {verifyError}
+                </Text>
+              ) : null}
+
+              <TextInput
+                style={{
+                  height: 52,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: theme.border,
+                  backgroundColor: theme.background,
+                  color: theme.text,
+                  fontSize: 20,
+                  fontWeight: "600",
+                  letterSpacing: 6,
+                  textAlign: "center",
+                  marginBottom: 16,
+                }}
+                value={verifyCode}
+                onChangeText={(t) => {
+                  setVerifyCode(t.replace(/\D/g, "").slice(0, 6));
+                  setVerifyError(null);
+                }}
+                placeholder="000000"
+                placeholderTextColor={theme.textMuted}
+                keyboardType="number-pad"
+                maxLength={6}
+              />
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, { backgroundColor: theme.primaryBtnBg, height: 50 }]}
+                onPress={handleVerifySignupCode}
+                disabled={verifyLoading}
+              >
+                {verifyLoading ? (
+                  <ActivityIndicator color={theme.primaryBtnText} />
+                ) : (
+                  <Text style={[styles.primaryBtnText, { color: theme.primaryBtnText }]}>
+                    VERIFY & COMPLETE
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 14 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      await resendSignupOtp(email);
+                      Alert.alert("Code Resent", "Check your inbox for the verification code.");
+                    } catch (e: any) {
+                      setVerifyError(e?.message || "Could not resend code.");
+                    }
+                  }}
+                >
+                  <Text style={{ fontSize: 12.5, fontWeight: "500", color: theme.text }}>Resend Email</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    setVerifyModalVisible(false);
+                    router.replace("/(auth)/sign_in");
+                  }}
+                >
+                  <Text style={{ fontSize: 12.5, fontWeight: "500", color: theme.textSecondary }}>
+                    Go to Sign In
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </GlassBackground>
   );
@@ -503,7 +715,7 @@ const styles = StyleSheet.create({
   },
   mainHeading: {
     fontSize: 32,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.6,
     marginBottom: 8,
   },
@@ -513,7 +725,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
   },
   faqLink: {
-    fontWeight: "700",
+    fontWeight: "500",
     textDecorationLine: "underline",
   },
   errorBanner: {
@@ -527,7 +739,7 @@ const styles = StyleSheet.create({
   errorBannerText: {
     color: "#EF4444",
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
     flex: 1,
   },
   inputPill: {
@@ -551,7 +763,7 @@ const styles = StyleSheet.create({
   },
   flagCodeText: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   inputDivider: {
     width: 1,
@@ -561,7 +773,7 @@ const styles = StyleSheet.create({
   textInput: {
     flex: 1,
     fontSize: 14.5,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   eyeToggleBtn: {
     padding: 4,
@@ -588,7 +800,7 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   termsLinkBold: {
-    fontWeight: "800",
+    fontWeight: "600",
     textDecorationLine: "underline",
   },
   primaryBtn: {
@@ -603,7 +815,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 1,
   },
   orDividerRow: {
@@ -619,7 +831,7 @@ const styles = StyleSheet.create({
   orDividerText: {
     paddingHorizontal: 14,
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   socialPillBtn: {
     height: 54,
@@ -631,7 +843,7 @@ const styles = StyleSheet.create({
   },
   socialPillText: {
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   footerRow: {
     marginTop: 32,
@@ -639,10 +851,10 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   footerLinkBold: {
-    fontWeight: "800",
+    fontWeight: "600",
     textDecorationLine: "underline",
   },
 });
