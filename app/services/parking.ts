@@ -222,9 +222,7 @@ export async function deleteVehicle(vehicleId: string) {
     return await supabase.from("vehicles").delete().eq("id", vehicleId);
 }
 
-// ------------------------------------------------------------------------------
-// LOCATIONS & SPACES (Real-time Supabase Data from Admin Panel)
-// ------------------------------------------------------------------------------
+
 
 export async function fetchParkingLocations(): Promise<ParkingLocation[]> {
     const { data, error } = await supabase
@@ -268,19 +266,17 @@ export async function fetchSpotsForLocation(
 // ------------------------------------------------------------------------------
 
 export async function fetchEvChargers(locationId: string): Promise<EvChargerTelemetry[]> {
-    try {
-        const { data, error } = await supabase
-            .from("ev_charging_points")
-            .select("*")
-            .eq("location_id", locationId);
+    const { data, error } = await supabase
+        .from("ev_charging_points")
+        .select("*")
+        .eq("location_id", locationId);
 
-        if (error) {
-            return [];
-        }
-        return data || [];
-    } catch {
-        return [];
+    if (error) {
+        console.warn("fetchEvChargers error:", error.message);
+        throw error;
     }
+
+    return data ?? [];
 }
 
 // ------------------------------------------------------------------------------
