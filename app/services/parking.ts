@@ -1081,8 +1081,8 @@ export async function fetchEvChargers(locationId: string): Promise<EvChargerTele
         .eq("location_id", locationId);
 
     if (error) {
-    console.warn("fetchEvChargers error:", error.message);
-    return [];
+        console.warn("fetchEvChargers error:", error.message);
+        return [];
     }
 
     return (data || []).map((c: any) => ({
@@ -1096,8 +1096,8 @@ export async function fetchEvChargers(locationId: string): Promise<EvChargerTele
         api_provider: c.api_provider || "OCPP 2.0.1",
         flat_rate_full_rwf: c.flat_rate_full_rwf || 10000,
         flat_rate_quick_rwf: c.flat_rate_quick_rwf || 9000,
-            quick_session_threshold_mins: c.quick_session_threshold_mins || 30,
-        }));
+        quick_session_threshold_mins: c.quick_session_threshold_mins || 30,
+    }));
 }
 
 /**
