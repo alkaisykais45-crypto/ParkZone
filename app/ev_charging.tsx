@@ -153,7 +153,7 @@ export default function EvChargingScreen() {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        {/* Hero Visual: Concentric Ambient Halo + Top-Down Car + Connected EV Charging Cable */}
+        
         <View style={[styles.heroContainer, { width: heroWidth, height: heroHeight }]}>
           {/* SVG Halo & Curved Charging Cable */}
           <Svg width={heroWidth} height={heroHeight} style={StyleSheet.absoluteFill}>
