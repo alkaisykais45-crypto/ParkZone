@@ -24,6 +24,17 @@ The [`schema.sql`](file:///Users/macbook/Documents/Dev/ParkZone/supabase/schema.
 3. Copy the contents of [`supabase/schema.sql`](file:///Users/macbook/Documents/Dev/ParkZone/supabase/schema.sql) and paste it into the editor.
 4. Click **Run**.
 
+### Existing project databases
+
+If the project already has tables, apply only the needed migration rather than rerunning the full schema:
+
+1. Open the project's **SQL Editor**.
+2. Run [`migrations/20261031104500_create_ev_charging_points.sql`](./migrations/20261031104500_create_ev_charging_points.sql).
+3. Confirm `public.ev_charging_points` exists in **Table Editor**.
+4. Retry the app's charger query. An HTTP `200` with an empty array means the API connection and table are working; add charger rows to show stations from the database.
+
+This migration grants public read access to charger listing fields, but no public write access. Charger commands and meter readings still require a trusted charger backend.
+
 ---
 
 ## 2. Resend Email Integration (`send-otp-email`)

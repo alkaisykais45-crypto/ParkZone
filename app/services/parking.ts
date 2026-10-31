@@ -1075,31 +1075,29 @@ export async function toggleSlotOccupancy(spaceId: string, isOccupied: boolean, 
 // ------------------------------------------------------------------------------
 
 export async function fetchEvChargers(locationId: string): Promise<EvChargerTelemetry[]> {
-    try {
-        const { data, error } = await supabase
-            .from("ev_charging_points")
-            .select("*")
-            .eq("location_id", locationId);
+    const { data, error } = await supabase
+        .from("ev_charging_points")
+        .select("*")
+        .eq("location_id", locationId);
 
-        if (error) {
-            return [];
-        }
-        return (data || []).map((c: any) => ({
-            ...c,
-            max_power_watts: c.max_power_watts || (c.max_output_kw * 1000),
-            charging_power_watts: c.charging_power_watts !== undefined ? c.charging_power_watts : (c.current_power_draw_kw * 1000),
-            voltage_volts: c.voltage_volts || (c.max_output_kw >= 50 ? 400 : 230),
-            amperage_amps: c.amperage_amps || (c.charging_power_watts ? Math.round(c.charging_power_watts / (c.voltage_volts || 400)) : 0),
-            is_operational: c.is_operational !== undefined ? c.is_operational : (c.status !== "faulted" && c.status !== "offline"),
-            operational_status: c.operational_status || (c.status === "faulted" ? "faulted" : "operational"),
-            api_provider: c.api_provider || "OCPP 2.0.1",
-            flat_rate_full_rwf: c.flat_rate_full_rwf || 10000,
-            flat_rate_quick_rwf: c.flat_rate_quick_rwf || 9000,
+    if (error) {
+    console.warn("fetchEvChargers error:", error.message);
+    return [];
+    }
+
+    return (data || []).map((c: any) => ({
+        ...c,
+        max_power_watts: c.max_power_watts || (c.max_output_kw * 1000),
+        charging_power_watts: c.charging_power_watts !== undefined ? c.charging_power_watts : (c.current_power_draw_kw * 1000),
+        voltage_volts: c.voltage_volts || (c.max_output_kw >= 50 ? 400 : 230),
+        amperage_amps: c.amperage_amps || (c.charging_power_watts ? Math.round(c.charging_power_watts / (c.voltage_volts || 400)) : 0),
+        is_operational: c.is_operational !== undefined ? c.is_operational : (c.status !== "faulted" && c.status !== "offline"),
+        operational_status: c.operational_status || (c.status === "faulted" ? "faulted" : "operational"),
+        api_provider: c.api_provider || "OCPP 2.0.1",
+        flat_rate_full_rwf: c.flat_rate_full_rwf || 10000,
+        flat_rate_quick_rwf: c.flat_rate_quick_rwf || 9000,
             quick_session_threshold_mins: c.quick_session_threshold_mins || 30,
         }));
-    } catch {
-        return [];
-    }
 }
 
 /**
