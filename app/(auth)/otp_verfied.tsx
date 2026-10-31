@@ -5,38 +5,69 @@ import { router } from "expo-router";
 import { Icons } from "../../constants/icons";
 import { GlassBackground } from "../../components/GlassBackground";
 import { GlassCard } from "../../components/GlassCard";
+import { useTheme } from "../../hooks/useTheme";
 
 const OtpVerified = () => {
+  const theme = useTheme();
+
   return (
     <GlassBackground>
       <SafeAreaView style={styles.container}>
         <GlassCard style={styles.card} intensity={60}>
           <View style={styles.badgeContainer}>
-            <View style={styles.badge}>
+            <View
+              style={[
+                styles.badge,
+                {
+                  backgroundColor: theme.accentSoft,
+                  borderColor: theme.borderStrong,
+                },
+              ]}
+            >
               <Image
                 source={Icons.logoImg}
-                style={{ width: 34, height: 34, tintColor: "#000000" }}
+                style={{ width: 34, height: 34, tintColor: theme.text }}
                 resizeMode="contain"
               />
             </View>
           </View>
 
-          <View style={styles.securityTag}>
-            <View style={styles.securityDot} />
-            <Text style={styles.securityText}>DATA ENCRYPTION • VERIFIED</Text>
+          <View
+            style={[
+              styles.securityTag,
+              {
+                backgroundColor: theme.accentSoft,
+                borderColor: theme.borderStrong,
+              },
+            ]}
+          >
+            <View style={[styles.securityDot, { backgroundColor: theme.text }]} />
+            <Text style={[styles.securityText, { color: theme.text }]}>
+              DATA ENCRYPTION • VERIFIED
+            </Text>
           </View>
 
-          <Text style={styles.title}>Identity Verified</Text>
-          <Text style={styles.subtitle}>
+          <Text style={[styles.title, { color: theme.text }]}>
+            Identity Verified
+          </Text>
+          <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
             Your security code was confirmed on the Kigali Smart Grid platform. You may now configure your new password.
           </Text>
 
           <TouchableOpacity
-            style={styles.primaryPillBtn}
+            style={[
+              styles.primaryPillBtn,
+              {
+                backgroundColor: theme.primaryBtnBg,
+                shadowColor: theme.cardShadow,
+              },
+            ]}
             onPress={() => router.replace("/(auth)/new_pass")}
             activeOpacity={0.85}
           >
-            <Text style={styles.primaryPillBtnText}>Set New Password</Text>
+            <Text style={[styles.primaryPillBtnText, { color: theme.primaryBtnText }]}>
+              Set New Password
+            </Text>
           </TouchableOpacity>
         </GlassCard>
       </SafeAreaView>
@@ -66,23 +97,14 @@ const styles = StyleSheet.create({
     width: 68,
     height: 68,
     borderRadius: 24,
-    backgroundColor: "rgba(255, 255, 255, 0.12)",
-    borderWidth: 2,
-    borderColor: "#FFFFFF",
+    borderWidth: 1.5,
     alignItems: "center",
     justifyContent: "center",
-  },
-  badgeText: {
-    color: "#FFFFFF",
-    fontSize: 32,
-    fontWeight: "900",
   },
   securityTag: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255, 255, 255, 0.08)",
     borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.2)",
     paddingHorizontal: 12,
     paddingVertical: 5,
     borderRadius: 20,
@@ -92,24 +114,20 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "#FFFFFF",
     marginRight: 6,
   },
   securityText: {
-    color: "#FFFFFF",
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
     letterSpacing: 0.8,
   },
   title: {
-    color: "#FFFFFF",
     fontSize: 24,
-    fontWeight: "900",
+    fontWeight: "600",
     marginBottom: 8,
     letterSpacing: -0.4,
   },
   subtitle: {
-    color: "#A1A1AA",
     fontSize: 13,
     lineHeight: 20,
     textAlign: "center",
@@ -117,22 +135,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
   },
   primaryPillBtn: {
-    backgroundColor: "#FFFFFF",
     borderRadius: 26,
     height: 52,
     width: "100%",
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: "#FFFFFF",
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.2,
+    shadowOpacity: 0.16,
     shadowRadius: 10,
     elevation: 4,
   },
   primaryPillBtnText: {
-    color: "#000000",
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.3,
   },
 });

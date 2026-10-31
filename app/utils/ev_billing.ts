@@ -2,9 +2,6 @@
 
 // Definiton of EV Billing Structure
 
-import { useRef } from "react";
-
-
 type EvBilling = {
     energyCost: number;
     taxAmount: number;
@@ -99,6 +96,11 @@ const calculateParkingSpendings = (parkingFee: number, period: 'daily' | 'weekly
 
 
 export { calculateEvBilling, calculateEnergySpendings, calculateParkingSpendings };
+
+export default function () {
+    return null;
+}
+
 
 
 

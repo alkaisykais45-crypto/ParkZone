@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -9,11 +9,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -23,21 +24,15 @@ import { Icons } from "../../constants/icons";
 import { useTheme } from "../../hooks/useTheme";
 import { useDriverVehicle } from "../../hooks/useDriverVehicle";
 import { HorizontalUltraRealisticCar } from "../../components/UltraRealisticCar";
-
-const DEFAULT_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80";
-
-const PRESET_AVATARS = [
-  "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80",
-  "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80",
-  "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=400&q=80",
-  "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=400&q=80",
-];
+import { ProfileSkeleton } from "../../components/SkeletonLoader";
 
 interface ProfileData {
   id: string;
   phone_number?: string;
   full_name?: string;
   email?: string;
+  emergency_contact?: string;
+  avatar_url?: string;
   created_at?: string;
 }
 
@@ -62,7 +57,7 @@ const SETTINGS_SECTIONS: SettingSection[] = [
         key: "performance",
         title: "Performance & Cache",
         subtitle: "Offline map cache, lot pre-fetching, battery saver",
-        icon: "speedometer-outline",
+        icon: "rocket-outline",
       },
       {
         key: "navigation",
@@ -92,7 +87,7 @@ const SETTINGS_SECTIONS: SettingSection[] = [
       {
         key: "personal",
         title: "Personal Information",
-        subtitle: "Legal name, National ID, driver license, emergency contact",
+        subtitle: "Legal name, phone, email, and emergency contact details",
         icon: "person-outline",
       },
       {
@@ -171,19 +166,37 @@ const SETTINGS_SECTIONS: SettingSection[] = [
 
 const Profile = () => {
   const theme = useTheme();
-  const { vehicle } = useDriverVehicle();
+  const { vehicle, reloadVehicle } = useDriverVehicle();
   const [profile, setProfile] = useState<ProfileData | null>(null);
   const [avatarUri, setAvatarUri] = useState<string | null>(null);
   const [avatarModalVisible, setAvatarModalVisible] = useState(false);
+  const [urlModalVisible, setUrlModalVisible] = useState(false);
+  const [customAvatarUrl, setCustomAvatarUrl] = useState("");
   const [vehicleCount, setVehicleCount] = useState<number>(0);
   const [sessionsCount, setSessionsCount] = useState<number>(0);
   const [loading, setLoading] = useState(true);
+
+  // Edit Profile States (Inline & Modal)
+  const [isEditingInline, setIsEditingInline] = useState(false);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editFullName, setEditFullName] = useState("");
+  const [editPhone, setEditPhone] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editEmergencyContact, setEditEmergencyContact] = useState("");
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
 
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     loadUserData();
   }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadUserData();
+      reloadVehicle();
+    }, [reloadVehicle])
+  );
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -194,56 +207,74 @@ const Profile = () => {
   const loadUserData = async () => {
     setLoading(true);
     try {
-      const storedAvatar = await AsyncStorage.getItem("@user_profile_avatar");
-      if (storedAvatar) {
-        setAvatarUri(storedAvatar);
-      }
-
       const {
         data: { user },
       } = await supabase.auth.getUser();
 
       if (user) {
-        if (!storedAvatar && user.user_metadata?.avatar_url) {
-          setAvatarUri(user.user_metadata.avatar_url);
+        let prof: any = null;
+        try {
+          const { data } = await supabase
+            .from("profiles")
+            .select("id, phone_number, full_name, email, avatar_url, emergency_contact, created_at")
+            .eq("id", user.id)
+            .maybeSingle();
+          prof = data;
+        } catch {
+          const { data } = await supabase
+            .from("profiles")
+            .select("id, phone_number, full_name, email, avatar_url, created_at")
+            .eq("id", user.id)
+            .maybeSingle();
+          prof = data;
         }
 
-        const { data: prof } = await supabase
-          .from("profiles")
-          .select("id, phone_number, full_name, email, created_at")
-          .eq("id", user.id)
-          .single();
+        const resolvedAvatar = prof?.avatar_url || user.user_metadata?.avatar_url || null;
+        setAvatarUri(resolvedAvatar);
 
-        setProfile(
-          prof || {
-            id: user.id,
-            phone_number: user.phone || "+250 788 123 456",
-            email: user.email || "driver@parkzone.rw",
-            full_name: user.user_metadata?.full_name || "Aline Mukamana",
-          }
-        );
-
-        const { count: vCount } = await supabase
-          .from("vehicles")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id);
-
-        setVehicleCount(vCount || 3);
-
-        const { count: sCount } = await supabase
-          .from("parking_tickets")
-          .select("id", { count: "exact", head: true });
-
-        setSessionsCount(sCount || 14);
-      } else {
         setProfile({
-          id: "usr-guest-kgl",
-          phone_number: "+250 788 123 456",
-          email: "aline.mukamana@email.com",
-          full_name: "Aline Mukamana",
+          id: user.id,
+          phone_number: prof?.phone_number || user.phone || "",
+          email: prof?.email || user.email || "",
+          full_name: prof?.full_name || user.user_metadata?.full_name || "",
+          emergency_contact: prof?.emergency_contact || "",
+          avatar_url: resolvedAvatar || undefined,
+          created_at: prof?.created_at,
         });
-        setVehicleCount(3);
-        setSessionsCount(14);
+
+        const [{ count: vCount }, { count: sCount }] = await Promise.all([
+          supabase
+            .from("vehicles")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", user.id),
+          supabase
+            .from("parking_tickets")
+            .select("id", { count: "exact", head: true })
+            .eq("user_id", user.id),
+        ]);
+
+        setVehicleCount(vCount ?? 0);
+        setSessionsCount(sCount ?? 0);
+
+        // Fetch user active vehicle
+        await reloadVehicle();
+      } else {
+        // Attempt reading cached profile offline
+        const cached = await AsyncStorage.getItem("@parkzone_cached_profile");
+        if (cached) {
+          try {
+            const parsed = JSON.parse(cached);
+            setProfile(parsed);
+            if (parsed.avatar_url) setAvatarUri(parsed.avatar_url);
+          } catch {
+            setProfile(null);
+          }
+        } else {
+          setProfile(null);
+          setAvatarUri(null);
+        }
+        setVehicleCount(0);
+        setSessionsCount(0);
       }
     } catch (e) {
       console.warn("loadUserData error:", e);
@@ -252,14 +283,111 @@ const Profile = () => {
     }
   };
 
-  const handlePickImage = async (type: "camera" | "library" | "preset", presetUrl?: string) => {
+  const startEditing = () => {
+    setEditFullName(profile?.full_name || "");
+    setEditPhone(profile?.phone_number || "");
+    setEditEmail(profile?.email || "");
+    setEditEmergencyContact(profile?.emergency_contact || "");
+    setIsEditingInline(true);
+  };
+
+  const openEditModal = () => {
+    setEditFullName(profile?.full_name || "");
+    setEditPhone(profile?.phone_number || "");
+    setEditEmail(profile?.email || "");
+    setEditEmergencyContact(profile?.emergency_contact || "");
+    setEditModalVisible(true);
+  };
+
+  const handleSaveProfile = async () => {
+    if (!editFullName.trim()) {
+      Alert.alert("Name Required", "Please enter your full legal name.");
+      return;
+    }
+
+    setIsSavingProfile(true);
+    try {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      const profilePayload: Record<string, any> = {
+        full_name: editFullName.trim(),
+        phone_number: editPhone.trim() || null,
+        email: editEmail.trim() || user?.email || null,
+        emergency_contact: editEmergencyContact.trim() || null,
+        avatar_url: avatarUri || null,
+        updated_at: new Date().toISOString(),
+      };
+
+      if (user?.id) {
+        profilePayload.id = user.id;
+        const { error: upsertErr } = await supabase
+          .from("profiles")
+          .upsert(profilePayload, { onConflict: "id" });
+
+        if (upsertErr) {
+          // Schema fallback if emergency_contact column not present
+          await supabase.from("profiles").upsert(
+            {
+              id: user.id,
+              full_name: editFullName.trim(),
+              phone_number: editPhone.trim() || null,
+              email: editEmail.trim() || user?.email || null,
+              avatar_url: avatarUri || null,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          );
+        }
+
+        // Sync auth metadata
+        try {
+          await supabase.auth.updateUser({
+            data: {
+              full_name: editFullName.trim(),
+              phone_number: editPhone.trim(),
+              avatar_url: avatarUri,
+            },
+          });
+        } catch {
+          // non-critical
+        }
+      }
+
+      // Always save locally to AsyncStorage
+      const updatedProfileObj: ProfileData = {
+        id: user?.id || profile?.id || "guest",
+        full_name: editFullName.trim(),
+        phone_number: editPhone.trim(),
+        email: editEmail.trim(),
+        emergency_contact: editEmergencyContact.trim(),
+        avatar_url: avatarUri || undefined,
+      };
+
+      await AsyncStorage.setItem(
+        "@parkzone_cached_profile",
+        JSON.stringify(updatedProfileObj)
+      );
+
+      setProfile(updatedProfileObj);
+      setIsEditingInline(false);
+      setEditModalVisible(false);
+      Alert.alert("Profile Updated", "Your profile details have been saved successfully.");
+    } catch (e: any) {
+      console.warn("Failed to update profile:", e);
+      Alert.alert("Save Error", e.message || "Could not save profile changes. Please try again.");
+    } finally {
+      setIsSavingProfile(false);
+    }
+  };
+
+  const handlePickImage = async (type: "camera" | "library") => {
     try {
       setAvatarModalVisible(false);
       let selectedUri: string | null = null;
 
-      if (type === "preset" && presetUrl) {
-        selectedUri = presetUrl;
-      } else if (type === "camera") {
+      if (type === "camera") {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== "granted") {
           Alert.alert("Permission Required", "Camera access is needed to take a profile photo.");
@@ -292,20 +420,54 @@ const Profile = () => {
 
       if (selectedUri) {
         setAvatarUri(selectedUri);
-        await AsyncStorage.setItem("@user_profile_avatar", selectedUri);
         try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user?.id) {
+            await supabase
+              .from("profiles")
+              .update({ avatar_url: selectedUri, updated_at: new Date().toISOString() })
+              .eq("id", user.id);
+          }
           await supabase.auth.updateUser({
             data: { avatar_url: selectedUri },
           });
+          await AsyncStorage.setItem("@parkzone_avatar_uri", selectedUri);
         } catch {
           // ignore
         }
-        Alert.alert("Profile Updated", "Your profile photo has been updated successfully.");
+        Alert.alert("Profile Updated", "Your profile photo has been updated.");
       }
     } catch (e) {
       console.warn("Avatar update error:", e);
       Alert.alert("Error", "Could not update profile photo.");
     }
+  };
+
+  const handleApplyImageUrl = async () => {
+    const url = customAvatarUrl.trim();
+    if (!url) {
+      Alert.alert("URL Required", "Please enter a valid image web address.");
+      return;
+    }
+    setAvatarUri(url);
+    setUrlModalVisible(false);
+    setCustomAvatarUrl("");
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id) {
+        await supabase
+          .from("profiles")
+          .update({ avatar_url: url, updated_at: new Date().toISOString() })
+          .eq("id", user.id);
+      }
+      await supabase.auth.updateUser({
+        data: { avatar_url: url },
+      });
+      await AsyncStorage.setItem("@parkzone_avatar_uri", url);
+    } catch {
+      // ignore
+    }
+    Alert.alert("Profile Updated", "Your profile image URL has been applied.");
   };
 
   const handleSignOut = async () => {
@@ -351,14 +513,12 @@ const Profile = () => {
           onPress={() => router.push("/settings/performance")}
           activeOpacity={0.75}
         >
-          <Ionicons name="speedometer-outline" size={18} color={theme.text} />
+          <Ionicons name="rocket-outline" size={18} color={theme.text} />
         </TouchableOpacity>
       </View>
 
       {loading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={theme.text} />
-        </View>
+        <ProfileSkeleton />
       ) : (
         <ScrollView
           contentContainerStyle={styles.scrollContent}
@@ -395,27 +555,146 @@ const Profile = () => {
                   },
                 ]}
               >
-                <Image
-                  source={{ uri: avatarUri || DEFAULT_AVATAR }}
-                  style={styles.avatarImage}
-                  resizeMode="cover"
-                />
+                {avatarUri ? (
+                  <Image
+                    source={{ uri: avatarUri }}
+                    style={styles.avatarImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons name="person" size={36} color={theme.textSecondary} />
+                )}
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.verifiedBadge, { backgroundColor: theme.primaryBtnBg }]}
+                style={[styles.verifiedBadge, { backgroundColor: theme.primaryBtnBg, borderColor: theme.surface }]}
                 onPress={() => setAvatarModalVisible(true)}
                 activeOpacity={0.8}
               >
-                <Ionicons name="camera" size={12} color={theme.primaryBtnText} />
+                <Ionicons name="camera" size={13} color={theme.primaryBtnText} />
               </TouchableOpacity>
             </View>
 
-            <Text style={[styles.userName, { color: theme.text }]}>
-              {profile?.full_name || "Aline Mukamana"}
-            </Text>
-            <Text style={[styles.userPhone, { color: theme.textSecondary }]}>
-              {profile?.phone_number || "+250 788 123 456"}
-            </Text>
+            {!isEditingInline ? (
+              <>
+                <Text style={[styles.userName, { color: theme.text }]}>
+                  {profile?.full_name || profile?.email || profile?.phone_number || "Motorist"}
+                </Text>
+                <Text style={[styles.userPhone, { color: theme.textSecondary }]}>
+                  {profile?.phone_number || profile?.email || "Not signed in"}
+                </Text>
+
+                {/* Quick Action Buttons: Edit Details & Change Photo */}
+                <View style={styles.profileActionRow}>
+                  <TouchableOpacity
+                    style={[styles.profileActionBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+                    onPress={startEditing}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="create-outline" size={14} color={theme.text} style={{ marginRight: 6 }} />
+                    <Text style={[styles.profileActionBtnText, { color: theme.text }]}>Edit Details</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.profileActionBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+                    onPress={() => setAvatarModalVisible(true)}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons name="camera-outline" size={14} color={theme.text} style={{ marginRight: 6 }} />
+                    <Text style={[styles.profileActionBtnText, { color: theme.text }]}>Change Photo</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            ) : (
+              /* Inline Profile Editor Form */
+              <View style={styles.inlineEditForm}>
+                <View style={styles.inlineEditHeader}>
+                  <Text style={[styles.inlineEditTitle, { color: theme.text }]}>Edit Motorist Details</Text>
+                  <TouchableOpacity
+                    onPress={() => setIsEditingInline(false)}
+                    style={[styles.inlineCloseBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+                  >
+                    <Ionicons name="close" size={16} color={theme.text} />
+                  </TouchableOpacity>
+                </View>
+
+                {/* Full Legal Name */}
+                <View style={styles.inlineField}>
+                  <Text style={[styles.inlineLabel, { color: theme.textSecondary }]}>FULL LEGAL NAME</Text>
+                  <TextInput
+                    value={editFullName}
+                    onChangeText={setEditFullName}
+                    placeholder="e.g. Jean Paul Mugisha"
+                    placeholderTextColor={theme.textMuted}
+                    style={[styles.inlineInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                  />
+                </View>
+
+                {/* Phone Number */}
+                <View style={styles.inlineField}>
+                  <Text style={[styles.inlineLabel, { color: theme.textSecondary }]}>PHONE NUMBER (MTN / AIRTEL)</Text>
+                  <TextInput
+                    value={editPhone}
+                    onChangeText={setEditPhone}
+                    placeholder="078... or 073..."
+                    placeholderTextColor={theme.textMuted}
+                    keyboardType="phone-pad"
+                    style={[styles.inlineInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                  />
+                </View>
+
+                {/* Email Address */}
+                <View style={styles.inlineField}>
+                  <Text style={[styles.inlineLabel, { color: theme.textSecondary }]}>EMAIL ADDRESS</Text>
+                  <TextInput
+                    value={editEmail}
+                    onChangeText={setEditEmail}
+                    placeholder="name@domain.com"
+                    placeholderTextColor={theme.textMuted}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    style={[styles.inlineInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                  />
+                </View>
+
+                {/* Emergency Contact */}
+                <View style={styles.inlineField}>
+                  <Text style={[styles.inlineLabel, { color: theme.textSecondary }]}>EMERGENCY CONTACT</Text>
+                  <TextInput
+                    value={editEmergencyContact}
+                    onChangeText={setEditEmergencyContact}
+                    placeholder="Next of kin phone number"
+                    placeholderTextColor={theme.textMuted}
+                    keyboardType="phone-pad"
+                    style={[styles.inlineInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                  />
+                </View>
+
+                {/* Action Buttons Row */}
+                <View style={styles.inlineBtnRow}>
+                  <TouchableOpacity
+                    style={[styles.inlineCancelBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+                    onPress={() => setIsEditingInline(false)}
+                    disabled={isSavingProfile}
+                    activeOpacity={0.8}
+                  >
+                    <Text style={[styles.inlineCancelBtnText, { color: theme.text }]}>Cancel</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.inlineSaveBtn, { backgroundColor: theme.primaryBtnBg, opacity: isSavingProfile ? 0.7 : 1 }]}
+                    onPress={handleSaveProfile}
+                    disabled={isSavingProfile}
+                    activeOpacity={0.88}
+                  >
+                    {isSavingProfile ? (
+                      <ActivityIndicator size="small" color={theme.primaryBtnText} />
+                    ) : (
+                      <Text style={[styles.inlineSaveBtnText, { color: theme.primaryBtnText }]}>Save Changes</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
 
             {/* Privacy Compliance Pill */}
             <View style={[styles.privacyPill, { backgroundColor: theme.background, borderColor: theme.border }]}>
@@ -458,31 +737,79 @@ const Profile = () => {
             <View style={styles.vehicleStudioHeader}>
               <View style={{ flex: 1, marginRight: 10 }}>
                 <View style={styles.vehicleLiveTagRow}>
-                  <View style={styles.vehicleLiveDot} />
+                  <View
+                    style={[
+                      styles.vehicleLiveDot,
+                      { backgroundColor: vehicle.plateNumber ? theme.accent : theme.textMuted },
+                    ]}
+                  />
                   <Text style={[styles.vehicleStudioSectionTag, { color: theme.textSecondary }]}>
-                    ACTIVE VEHICLE • REAL TIME
+                    {vehicle.plateNumber ? "ACTIVE VEHICLE • REAL TIME" : "NO ACTIVE VEHICLE"}
                   </Text>
                 </View>
                 <Text style={[styles.vehicleStudioTitle, { color: theme.text }]} numberOfLines={1}>
-                  {vehicle.makeModel}
+                  {vehicle.plateNumber
+                    ? vehicle.makeModel || "Registered Vehicle"
+                    : "Register Your Vehicle"}
                 </Text>
               </View>
 
-              <TouchableOpacity
-                style={[styles.customizeBadgeBtn, { backgroundColor: theme.primaryBtnBg }]}
-                onPress={() => router.push("/settings/vehicle_customizer")}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="color-palette-outline"
-                  size={14}
-                  color={theme.primaryBtnText}
-                  style={{ marginRight: 5 }}
-                />
-                <Text style={[styles.customizeBadgeText, { color: theme.primaryBtnText }]}>
-                  Customize
-                </Text>
-              </TouchableOpacity>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                {vehicleCount > 1 && (
+                  <TouchableOpacity
+                    style={[
+                      styles.customizeBadgeBtn,
+                      { backgroundColor: theme.surfaceMuted, borderWidth: 1, borderColor: theme.border },
+                    ]}
+                    onPress={() => router.push("/(tabs)/vehicles")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="swap-horizontal-outline"
+                      size={14}
+                      color={theme.text}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={[styles.customizeBadgeText, { color: theme.text }]}>
+                      Fleet ({vehicleCount})
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
+                {vehicle.plateNumber ? (
+                  <TouchableOpacity
+                    style={[styles.customizeBadgeBtn, { backgroundColor: theme.primaryBtnBg }]}
+                    onPress={() => router.push("/settings/vehicle_customizer")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="options-outline"
+                      size={14}
+                      color={theme.primaryBtnText}
+                      style={{ marginRight: 5 }}
+                    />
+                    <Text style={[styles.customizeBadgeText, { color: theme.primaryBtnText }]}>
+                      Customize
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.customizeBadgeBtn, { backgroundColor: theme.primaryBtnBg }]}
+                    onPress={() => router.push("/(tabs)/vehicles")}
+                    activeOpacity={0.8}
+                  >
+                    <Ionicons
+                      name="add-outline"
+                      size={15}
+                      color={theme.primaryBtnText}
+                      style={{ marginRight: 4 }}
+                    />
+                    <Text style={[styles.customizeBadgeText, { color: theme.primaryBtnText }]}>
+                      Add
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
             </View>
 
             {/* Interactive Vehicle Showcase Box */}
@@ -491,49 +818,93 @@ const Profile = () => {
                 styles.vehicleStageBox,
                 { backgroundColor: theme.background, borderColor: theme.border },
               ]}
-              onPress={() => router.push("/settings/vehicle_customizer")}
+              onPress={() =>
+                router.push(vehicle.plateNumber ? "/settings/vehicle_customizer" : "/(tabs)/vehicles")
+              }
               activeOpacity={0.88}
             >
               <View style={styles.carStageCenter}>
-                <HorizontalUltraRealisticCar color={vehicle.colorVariant} scale={1.12} />
+                <HorizontalUltraRealisticCar
+                  color={vehicle.plateNumber ? vehicle.colorVariant : "silver"}
+                  scale={1.12}
+                />
               </View>
 
-              <View style={[styles.plateFloatingBadge, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-                <Text style={styles.plateFlagText}>🇷🇼</Text>
-                <Text style={[styles.plateNumberText, { color: theme.text }]}>{vehicle.plateNumber}</Text>
+              <View
+                style={[
+                  styles.plateFloatingBadge,
+                  { backgroundColor: theme.surface, borderColor: theme.border },
+                ]}
+              >
+                <Text style={styles.plateFlagText}>RW</Text>
+                <Text
+                  style={[
+                    styles.plateNumberText,
+                    { color: vehicle.plateNumber ? theme.text : theme.textMuted },
+                  ]}
+                >
+                  {vehicle.plateNumber || "ADD PLATE"}
+                </Text>
               </View>
             </TouchableOpacity>
 
-            {/* Real-time Telemetry Specs Grid */}
-            <View style={styles.vehicleSpecsRow}>
-              <View style={styles.specItemCol}>
-                <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>Finish</Text>
-                <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
-                  {vehicle.colorName.split(" ")[0]}
-                </Text>
+            {/* Real-time Telemetry Specs Grid or Add CTA */}
+            {vehicle.plateNumber ? (
+              <View style={styles.vehicleSpecsRow}>
+                <View style={styles.specItemCol}>
+                  <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>Finish</Text>
+                  <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
+                    {vehicle.colorName.split(" ")[0]}
+                  </Text>
+                </View>
+                <View style={[styles.specItemDivider, { backgroundColor: theme.border }]} />
+                <View style={styles.specItemCol}>
+                  <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>Type</Text>
+                  <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
+                    {vehicle.vehicleType.toUpperCase()}
+                  </Text>
+                </View>
+                <View style={[styles.specItemDivider, { backgroundColor: theme.border }]} />
+                <View style={styles.specItemCol}>
+                  <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>Plug</Text>
+                  <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
+                    {vehicle.plugType.split(" ")[0]}
+                  </Text>
+                </View>
+                <View style={[styles.specItemDivider, { backgroundColor: theme.border }]} />
+                <View style={styles.specItemCol}>
+                  <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>
+                    {vehicle.vehicleType === "ev" ? "SoC / Range" : "Fuel Status"}
+                  </Text>
+                  <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
+                    {vehicle.vehicleType === "ev"
+                      ? `${vehicle.batteryLevelPercent}% (${vehicle.estimatedRangeKm}km)`
+                      : "Ready"}
+                  </Text>
+                </View>
               </View>
-              <View style={[styles.specItemDivider, { backgroundColor: theme.border }]} />
-              <View style={styles.specItemCol}>
-                <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>Type</Text>
-                <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
-                  {vehicle.vehicleType.toUpperCase()}
+            ) : (
+              <View style={{ paddingTop: 2 }}>
+                <Text style={[styles.emptyVehicleDesc, { color: theme.textSecondary }]}>
+                  Link your license plate to activate automatic gate clearance, real-time occupancy tracking, and EV priority charging.
                 </Text>
+                <TouchableOpacity
+                  style={[styles.registerVehicleCtaBtn, { backgroundColor: theme.primaryBtnBg }]}
+                  onPress={() => router.push("/(tabs)/vehicles")}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons
+                    name="add-circle-outline"
+                    size={17}
+                    color={theme.primaryBtnText}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text style={[styles.registerVehicleCtaText, { color: theme.primaryBtnText }]}>
+                    Register Your Vehicle
+                  </Text>
+                </TouchableOpacity>
               </View>
-              <View style={[styles.specItemDivider, { backgroundColor: theme.border }]} />
-              <View style={styles.specItemCol}>
-                <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>Plug</Text>
-                <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
-                  {vehicle.plugType.split(" ")[0]}
-                </Text>
-              </View>
-              <View style={[styles.specItemDivider, { backgroundColor: theme.border }]} />
-              <View style={styles.specItemCol}>
-                <Text style={[styles.specItemLabel, { color: theme.textSecondary }]}>SoC / Range</Text>
-                <Text style={[styles.specItemValue, { color: theme.text }]} numberOfLines={1}>
-                  {vehicle.batteryLevelPercent}% ({vehicle.estimatedRangeKm}km)
-                </Text>
-              </View>
-            </View>
+            )}
           </View>
 
           {/* Grouped Settings Sections */}
@@ -619,7 +990,7 @@ const Profile = () => {
             <View style={[styles.avatarModalHandle, { backgroundColor: theme.border }]} />
             <Text style={[styles.avatarModalTitle, { color: theme.text }]}>Update Profile Photo</Text>
             <Text style={[styles.avatarModalSub, { color: theme.textSecondary }]}>
-              Take a new photo, upload from gallery, or choose an avatar
+              Take a new photo, upload from gallery, or specify an image URL
             </Text>
 
             <TouchableOpacity
@@ -640,23 +1011,17 @@ const Profile = () => {
               <Text style={[styles.avatarOptionText, { color: theme.text }]}>Choose from Photo Library</Text>
             </TouchableOpacity>
 
-            <Text style={[styles.avatarPresetLabel, { color: theme.textSecondary }]}>Or choose an avatar:</Text>
-            <View style={styles.avatarPresetsRow}>
-              {PRESET_AVATARS.map((url, idx) => (
-                <TouchableOpacity
-                  key={idx}
-                  onPress={() => handlePickImage("preset", url)}
-                  activeOpacity={0.75}
-                  style={[
-                    styles.avatarPresetThumbCircle,
-                    { borderColor: theme.border },
-                    avatarUri === url && { borderColor: theme.isDark ? "#FFFFFF" : "#09090B", borderWidth: 2.5 },
-                  ]}
-                >
-                  <Image source={{ uri: url }} style={styles.avatarPresetThumb} />
-                </TouchableOpacity>
-              ))}
-            </View>
+            <TouchableOpacity
+              style={[styles.avatarOptionBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+              onPress={() => {
+                setAvatarModalVisible(false);
+                setUrlModalVisible(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="link-outline" size={20} color={theme.text} />
+              <Text style={[styles.avatarOptionText, { color: theme.text }]}>Enter Photo Web URL</Text>
+            </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.avatarModalCancelBtn, { backgroundColor: theme.border }]}
@@ -665,6 +1030,176 @@ const Profile = () => {
             >
               <Text style={[styles.avatarModalCancelText, { color: theme.text }]}>Cancel</Text>
             </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* URL Input Modal */}
+      <Modal
+        visible={urlModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setUrlModalVisible(false)}
+      >
+        <View style={styles.avatarModalBackdrop}>
+          <View style={[styles.avatarModalContent, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={[styles.avatarModalHandle, { backgroundColor: theme.border }]} />
+            <Text style={[styles.avatarModalTitle, { color: theme.text }]}>Enter Profile Photo URL</Text>
+            <Text style={[styles.avatarModalSub, { color: theme.textSecondary }]}>
+              Paste a direct HTTPS link to your profile image
+            </Text>
+
+            <TextInput
+              value={customAvatarUrl}
+              onChangeText={setCustomAvatarUrl}
+              placeholder="https://images.unsplash.com/..."
+              placeholderTextColor={theme.textMuted}
+              autoCapitalize="none"
+              keyboardType="url"
+              style={[
+                styles.modalTextInput,
+                { backgroundColor: theme.background, borderColor: theme.border, color: theme.text },
+              ]}
+            />
+
+            <TouchableOpacity
+              style={[styles.saveProfileModalBtn, { backgroundColor: theme.primaryBtnBg }]}
+              onPress={handleApplyImageUrl}
+              activeOpacity={0.88}
+            >
+              <Text style={[styles.saveProfileModalBtnText, { color: theme.primaryBtnText }]}>Apply Photo URL</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.avatarModalCancelBtn, { backgroundColor: theme.border, marginTop: 10 }]}
+              onPress={() => setUrlModalVisible(false)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.avatarModalCancelText, { color: theme.text }]}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Edit Profile Full Modal */}
+      <Modal
+        visible={editModalVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditModalVisible(false)}
+      >
+        <View style={styles.avatarModalBackdrop}>
+          <View style={[styles.editModalContent, { backgroundColor: theme.surface, borderColor: theme.border }]}>
+            <View style={styles.editModalHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.avatarModalTitle, { color: theme.text }]}>Edit Motorist Profile</Text>
+                <Text style={[styles.avatarModalSub, { color: theme.textSecondary, marginBottom: 0 }]}>
+                  Synchronized with cloud & device storage
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setEditModalVisible(false)}
+                style={[styles.modalCloseBtn, { backgroundColor: theme.background, borderColor: theme.border }]}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="close" size={18} color={theme.text} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingVertical: 14 }}>
+              {/* Avatar Preview & Action */}
+              <View style={styles.editModalAvatarRow}>
+                <TouchableOpacity
+                  onPress={() => setAvatarModalVisible(true)}
+                  style={[styles.editModalAvatarCircle, { backgroundColor: theme.background, borderColor: theme.border }]}
+                  activeOpacity={0.8}
+                >
+                  {avatarUri ? (
+                    <Image source={{ uri: avatarUri }} style={styles.avatarImage} resizeMode="cover" />
+                  ) : (
+                    <Ionicons name="person" size={28} color={theme.textSecondary} />
+                  )}
+                </TouchableOpacity>
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={[styles.editAvatarName, { color: theme.text }]}>Profile Avatar</Text>
+                  <TouchableOpacity
+                    style={[styles.changePhotoPill, { backgroundColor: theme.background, borderColor: theme.border }]}
+                    onPress={() => setAvatarModalVisible(true)}
+                    activeOpacity={0.75}
+                  >
+                    <Ionicons name="camera-outline" size={13} color={theme.text} style={{ marginRight: 4 }} />
+                    <Text style={[styles.changePhotoPillText, { color: theme.text }]}>Change Photo</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Input Fields */}
+              <View style={styles.modalFieldGroup}>
+                <Text style={[styles.modalFieldLabel, { color: theme.textSecondary }]}>FULL LEGAL NAME</Text>
+                <TextInput
+                  value={editFullName}
+                  onChangeText={setEditFullName}
+                  placeholder="e.g. Jean Paul Mugisha"
+                  placeholderTextColor={theme.textMuted}
+                  style={[styles.modalTextInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                />
+              </View>
+
+              <View style={styles.modalFieldGroup}>
+                <Text style={[styles.modalFieldLabel, { color: theme.textSecondary }]}>PHONE NUMBER</Text>
+                <TextInput
+                  value={editPhone}
+                  onChangeText={setEditPhone}
+                  placeholder="078... or 073..."
+                  placeholderTextColor={theme.textMuted}
+                  keyboardType="phone-pad"
+                  style={[styles.modalTextInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                />
+              </View>
+
+              <View style={styles.modalFieldGroup}>
+                <Text style={[styles.modalFieldLabel, { color: theme.textSecondary }]}>EMAIL ADDRESS</Text>
+                <TextInput
+                  value={editEmail}
+                  onChangeText={setEditEmail}
+                  placeholder="name@domain.com"
+                  placeholderTextColor={theme.textMuted}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  style={[styles.modalTextInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                />
+              </View>
+
+
+
+              <View style={styles.modalFieldGroup}>
+                <Text style={[styles.modalFieldLabel, { color: theme.textSecondary }]}>EMERGENCY CONTACT</Text>
+                <TextInput
+                  value={editEmergencyContact}
+                  onChangeText={setEditEmergencyContact}
+                  placeholder="Next of kin phone number"
+                  placeholderTextColor={theme.textMuted}
+                  keyboardType="phone-pad"
+                  style={[styles.modalTextInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
+                />
+              </View>
+
+              {/* Save CTA */}
+              <TouchableOpacity
+                style={[styles.saveProfileModalBtn, { backgroundColor: theme.primaryBtnBg, opacity: isSavingProfile ? 0.7 : 1 }]}
+                onPress={handleSaveProfile}
+                disabled={isSavingProfile}
+                activeOpacity={0.88}
+              >
+                {isSavingProfile ? (
+                  <ActivityIndicator size="small" color={theme.primaryBtnText} />
+                ) : (
+                  <Text style={[styles.saveProfileModalBtnText, { color: theme.primaryBtnText }]}>
+                    Save Profile Changes
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -703,13 +1238,13 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   headerSubtitle: {
     fontSize: 11,
     marginTop: 2,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   headerIconBtn: {
     width: 40,
@@ -744,10 +1279,11 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   avatarCircle: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 1.5,
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    borderWidth: 2,
+    overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -757,25 +1293,26 @@ const styles = StyleSheet.create({
   },
   verifiedBadge: {
     position: "absolute",
-    bottom: 0,
-    right: 0,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    bottom: -2,
+    right: -2,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
-    borderWidth: 2,
+    borderWidth: 2.5,
     borderColor: "#FFFFFF",
+    zIndex: 10,
   },
   userName: {
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   userPhone: {
     fontSize: 12,
     marginTop: 2,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   privacyPill: {
     flexDirection: "row",
@@ -794,7 +1331,7 @@ const styles = StyleSheet.create({
   },
   privacyPillText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   statsGrid: {
     flexDirection: "row",
@@ -812,12 +1349,12 @@ const styles = StyleSheet.create({
   },
   statValue: {
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   statLabel: {
     fontSize: 10,
     marginTop: 2,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   statDivider: {
     width: 1,
@@ -828,7 +1365,7 @@ const styles = StyleSheet.create({
   },
   sectionHeading: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.8,
     marginBottom: 10,
     marginLeft: 4,
@@ -861,7 +1398,7 @@ const styles = StyleSheet.create({
   },
   settingItemTitle: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   settingItemSub: {
     fontSize: 11,
@@ -876,7 +1413,7 @@ const styles = StyleSheet.create({
   },
   itemBadgeText: {
     fontSize: 9,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.5,
   },
   signOutBtn: {
@@ -892,7 +1429,7 @@ const styles = StyleSheet.create({
   signOutBtnText: {
     color: "#71717A",
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   brandFooter: {
     alignItems: "center",
@@ -907,7 +1444,7 @@ const styles = StyleSheet.create({
   },
   brandFooterTitle: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 1,
   },
   versionFooter: {
@@ -941,16 +1478,15 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "#22C55E",
   },
   vehicleStudioSectionTag: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
     letterSpacing: 0.6,
   },
   vehicleStudioTitle: {
     fontSize: 17,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   customizeBadgeBtn: {
     flexDirection: "row",
@@ -961,7 +1497,7 @@ const styles = StyleSheet.create({
   },
   customizeBadgeText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   vehicleStageBox: {
     height: 120,
@@ -994,7 +1530,7 @@ const styles = StyleSheet.create({
   },
   plateNumberText: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.5,
   },
   vehicleSpecsRow: {
@@ -1002,18 +1538,35 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
+  emptyVehicleDesc: {
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: "center",
+    marginBottom: 12,
+  },
+  registerVehicleCtaBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 10,
+    borderRadius: 14,
+  },
+  registerVehicleCtaText: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
   specItemCol: {
     flex: 1,
     alignItems: "center",
   },
   specItemLabel: {
     fontSize: 10,
-    fontWeight: "600",
+    fontWeight: "400",
     marginBottom: 2,
   },
   specItemValue: {
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   specItemDivider: {
     width: 1,
@@ -1022,6 +1575,7 @@ const styles = StyleSheet.create({
   avatarImage: {
     width: "100%",
     height: "100%",
+    borderRadius: 42,
   },
   avatarModalBackdrop: {
     flex: 1,
@@ -1044,13 +1598,13 @@ const styles = StyleSheet.create({
   },
   avatarModalTitle: {
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.3,
     marginBottom: 4,
   },
   avatarModalSub: {
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "400",
     marginBottom: 20,
   },
   avatarOptionBtn: {
@@ -1065,11 +1619,11 @@ const styles = StyleSheet.create({
   },
   avatarOptionText: {
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   avatarPresetLabel: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
     marginTop: 10,
     marginBottom: 12,
   },
@@ -1097,6 +1651,218 @@ const styles = StyleSheet.create({
   },
   avatarModalCancelText: {
     fontSize: 14,
+    fontWeight: "500",
+  },
+
+  /* Action Buttons on User Card */
+  profileActionRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 14,
+    width: "100%",
+  },
+  profileActionBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    height: 38,
+    borderRadius: 12,
+    borderWidth: 1,
+  },
+  profileActionBtnText: {
+    fontSize: 12,
+    fontWeight: "500",
+  },
+
+  /* Edit Profile Modal Styles */
+  editModalContent: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    borderTopWidth: 1,
+    padding: 24,
+    maxHeight: "85%",
+    paddingBottom: Platform.OS === "ios" ? 40 : 24,
+  },
+  editModalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  editModalAvatarRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+    paddingVertical: 6,
+  },
+  editModalAvatarCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 1.5,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  editAvatarName: {
+    fontSize: 14,
+    fontWeight: "600",
+    marginBottom: 6,
+  },
+  changePhotoPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  changePhotoPillText: {
+    fontSize: 11,
+    fontWeight: "500",
+  },
+  modalFieldGroup: {
+    marginBottom: 14,
+  },
+  modalFieldLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.8,
+    marginBottom: 6,
+    marginLeft: 2,
+  },
+  modalTextInput: {
+    height: 48,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  saveProfileModalBtn: {
+    height: 50,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 10,
+    marginBottom: 10,
+  },
+  saveProfileModalBtnText: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
+
+  /* Motorist Identity Badges */
+  detailsBadgeContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginTop: 12,
+    width: "100%",
+  },
+  detailBadgeCol: {
+    flex: 1,
+    alignItems: "center",
+  },
+  detailBadgeLabel: {
+    fontSize: 10,
+    fontWeight: "500",
+    marginBottom: 2,
+  },
+  detailBadgeValue: {
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  detailBadgeDivider: {
+    width: 1,
+    height: 22,
+  },
+
+  /* Inline Profile Editor Form */
+  inlineEditForm: {
+    width: "100%",
+    marginTop: 14,
+  },
+  inlineEditHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 12,
+    paddingBottom: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "rgba(150, 150, 150, 0.2)",
+  },
+  inlineEditTitle: {
+    fontSize: 15,
     fontWeight: "700",
+    letterSpacing: -0.3,
+  },
+  inlineCloseBtn: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inlineField: {
+    marginBottom: 12,
+  },
+  inlineLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.6,
+    marginBottom: 5,
+    marginLeft: 2,
+  },
+  inlineInput: {
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    fontSize: 13,
+    fontWeight: "500",
+  },
+  inlineBtnRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 8,
+    marginBottom: 4,
+  },
+  inlineCancelBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inlineCancelBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  inlineSaveBtn: {
+    flex: 2,
+    height: 44,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  inlineSaveBtnText: {
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

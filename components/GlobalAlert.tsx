@@ -173,7 +173,7 @@ export const GlobalAlert: React.FC = () => {
                           styles.buttonText,
                           {
                             color: btnTextColor,
-                            fontWeight: isCancel ? "600" : "700",
+                            fontWeight: isCancel ? "500" : "400",
                           },
                         ]}
                       >
@@ -212,7 +212,7 @@ const styles = StyleSheet.create({
   },
   titleText: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.3,
     marginBottom: 8,
     textAlign: "left",

@@ -1,7 +1,10 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Animated,
   Dimensions,
+  Easing,
+  Image,
   Modal,
   Platform,
   ScrollView,
@@ -14,14 +17,22 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 import { router, useLocalSearchParams } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "../hooks/useTheme";
-import { PARKING_HISTORY_STORAGE_KEY } from "./recent_parkings";
+import { supabase } from "./lib/supabase";
+import { completeParkingSession, fetchActiveParkingTicket, resolveSpaceImageUrl } from "./services/parking";
+import { initiateMobilePayment } from "./services/mobilePayment";
+import { VoiceGuidance } from "./services/voiceGuidance";
 
 const { width } = Dimensions.get("window");
 
+// Animated SVG Circle
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
+
 export interface ParkingSessionDetails {
   id: string;
+  locationId?: string;
+  spaceId?: string;
+  imageUrl?: string;
   name: string;
   address?: string;
   bayNumber: string;
@@ -30,6 +41,8 @@ export interface ParkingSessionDetails {
   date?: string;
   duration?: string;
   durationHours?: number;
+  hourlyRate?: number;
+  dailyCap?: number;
   cost?: number;
   currency?: string;
   status?: "Active" | "Completed" | "Closed";
@@ -43,31 +56,132 @@ export default function ParkingSessionScreen() {
   const theme = useTheme();
   const params = useLocalSearchParams();
 
-  // Session state initialized from route params or fallback
+  // Session state initialized from route params and synced with database
   const [session, setSession] = useState<ParkingSessionDetails>(() => {
-    const rawCost = params.cost ? Number(params.cost) : 400;
+    const rawCost = params.cost ? Number(params.cost) : 0;
     const rawFine = params.violationFine ? Number(params.violationFine) : undefined;
     const rawHours = params.durationHours ? Number(params.durationHours) : undefined;
+    const rawRate = params.hourlyRate ? Number(params.hourlyRate) : undefined;
 
     return {
-      id: (params.id as string) || "session-active",
-      name: (params.name as string) || "Downtown Boulevard",
-      address: (params.address as string) || "321 Downtown Boulevard, Business Bay",
-      bayNumber: (params.bayNumber as string) || "A-09",
-      zoneCode: (params.zoneCode as string) || "Zone A",
-      plate: (params.plate as string) || "RAD 812 B",
-      date: (params.date as string) || "Today, 10:00 AM",
-      duration: (params.duration as string) || "1h 00m",
+      id: (params.id as string) || "",
+      locationId: (params.locationId as string) || undefined,
+      imageUrl:
+        (params.image as string) ||
+        resolveSpaceImageUrl(`${params.name || "lot"}-${params.bayNumber || "bay"}`, "regular"),
+      name: (params.name as string) || "Parking Facility",
+      address: (params.address as string) || "",
+      bayNumber: (params.bayNumber as string) || "-",
+      zoneCode: (params.zoneCode as string) || "",
+      plate: (params.plate as string) || "",
+      date: (params.date as string) || "",
+      duration: (params.duration as string) || "",
       durationHours: rawHours,
-      cost: isNaN(rawCost) ? 400 : rawCost,
+      hourlyRate: rawRate,
+      dailyCap: undefined,
+      cost: isNaN(rawCost) ? 0 : rawCost,
       currency: (params.currency as string) || "RWF",
       status: ((params.status as string) || "Active") as "Active" | "Completed" | "Closed",
-      receiptNumber: (params.receiptNumber as string) || "PZ-2026-9901",
-      entryTime: (params.entryTime as string) || new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+      receiptNumber: (params.receiptNumber as string) || "",
+      entryTime: (params.entryTime as string) || new Date().toISOString(),
       violationFine: rawFine,
       violationReason: (params.violationReason as string) || undefined,
     };
   });
+
+  const [evCharger, setEvCharger] = useState<{
+    id?: string;
+    powerKw?: number;
+    flatRateFull?: number;
+    flatRateQuick?: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        let ticketRow: any = null;
+        if (params.id) {
+          const { data } = await supabase
+            .from("parking_tickets")
+            .select("*, parking_locations(*), parking_spaces(*)")
+            .eq("id", String(params.id))
+            .maybeSingle();
+          ticketRow = data;
+        } else {
+          ticketRow = await fetchActiveParkingTicket();
+        }
+        if (!mounted || !ticketRow) return;
+
+        const loc = Array.isArray(ticketRow.parking_locations)
+          ? ticketRow.parking_locations[0]
+          : ticketRow.parking_locations;
+        const sp = Array.isArray(ticketRow.parking_spaces)
+          ? ticketRow.parking_spaces[0]
+          : ticketRow.parking_spaces;
+        const rate = Number(ticketRow.hourly_rate) || Number(loc?.hourly_rate) || 0;
+        const cap = Number(ticketRow.daily_cap) || Number(loc?.daily_rate) || 0;
+        const total = Number(ticketRow.total_amount) || rate;
+        const hrs = Number(ticketRow.hours_elapsed) > 0
+          ? Number(ticketRow.hours_elapsed)
+          : (params.durationHours ? Number(params.durationHours) : (rate > 0 ? Math.max(1, Math.round(total / rate)) : 1));
+        const resolvedLocId = ticketRow.location_id || loc?.id;
+
+        if (resolvedLocId) {
+          const { data: chargerRow } = await supabase
+            .from("ev_charging_points")
+            .select("id, max_output_kw, flat_rate_full_rwf, flat_rate_quick_rwf")
+            .eq("location_id", resolvedLocId)
+            .eq("is_operational", true)
+            .limit(1)
+            .maybeSingle();
+
+          if (mounted && chargerRow) {
+            setEvCharger({
+              id: chargerRow.id,
+              powerKw: Number(chargerRow.max_output_kw) || undefined,
+              flatRateFull: Number(chargerRow.flat_rate_full_rwf) || undefined,
+              flatRateQuick: Number(chargerRow.flat_rate_quick_rwf) || undefined,
+            });
+          }
+        }
+
+        setSession((prev) => ({
+          ...prev,
+          id: ticketRow.id,
+          locationId: resolvedLocId || prev.locationId,
+          spaceId: ticketRow.space_id || sp?.id,
+          imageUrl:
+            sp?.image_url?.trim() ||
+            loc?.image_url?.trim() ||
+            resolveSpaceImageUrl(
+              `${resolvedLocId || loc?.name || "lot"}-${sp?.space_number || ticketRow.id}`,
+              sp?.space_type || "regular"
+            ),
+          name: loc?.name || prev.name,
+          address: loc?.address || prev.address,
+          bayNumber: sp?.space_number || prev.bayNumber,
+          zoneCode: sp?.zone_code || prev.zoneCode,
+          plate: ticketRow.vehicle_plate || prev.plate,
+          date: ticketRow.entry_time ? new Date(ticketRow.entry_time).toLocaleString() : prev.date,
+          durationHours: hrs,
+          duration: `${hrs}h 00m`,
+          hourlyRate: rate || prev.hourlyRate,
+          dailyCap: cap || prev.dailyCap,
+          cost: total,
+          currency: loc?.currency || prev.currency || "RWF",
+          status: ticketRow.status === "cancelled" ? "Closed" : (ticketRow.status === "completed" || Boolean(ticketRow.exit_time)) ? "Completed" : "Active",
+          receiptNumber: ticketRow.ticket_number || prev.receiptNumber,
+          entryTime: ticketRow.entry_time || prev.entryTime,
+        }));
+      } catch (e) {
+        console.warn("Failed to load parking session from DB:", e);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, [params.id]);
 
   const [currentTick, setCurrentTick] = useState(Date.now());
   const [receiptModalVisible, setReceiptModalVisible] = useState(false);
@@ -135,43 +249,107 @@ export default function ParkingSessionScreen() {
   const strokeWidth = 16;
   const radius = (svgSize - strokeWidth * 2) / 2;
   const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference * (1 - progress);
 
-  const activeColor = isOverdue ? "#EF4444" : (theme.isDark ? "#FFFFFF" : "#09090B");
-  const trackColor = theme.isDark ? "rgba(255, 255, 255, 0.10)" : "#E4E4E7";
+  // Animation values for breathing pulse and smooth progress
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const glowOpacity = useRef(new Animated.Value(0.2)).current;
+  const progressAnim = useRef(new Animated.Value(progress)).current;
 
-  // Handle Extend Time
+  useEffect(() => {
+    Animated.timing(progressAnim, {
+      toValue: progress,
+      duration: 500,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+  }, [progress]);
+
+  useEffect(() => {
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(pulseAnim, {
+            toValue: isOverdue ? 1.08 : 1.04,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowOpacity, {
+            toValue: isOverdue ? 0.7 : 0.45,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowOpacity, {
+            toValue: 0.15,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+      ])
+    );
+    pulseLoop.start();
+    return () => pulseLoop.stop();
+  }, [isOverdue]);
+
+  const animatedStrokeDashoffset = progressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [circumference, 0],
+  });
+
+  const activeColor = isOverdue ? theme.danger : theme.accent;
+  const trackColor = theme.pillInactiveBg;
+
+  // Handle Extend Time (persisted in database with background mobile payment)
   const handleExtendTime = async () => {
+    const derivedRate =
+      session.hourlyRate ??
+      (session.cost && durationHours > 0 ? Math.round(session.cost / durationHours) : 300);
     const newHours = durationHours + 1;
+    const newTotal = (session.cost || 0) + derivedRate;
     setSession((prev) => ({
       ...prev,
       durationHours: newHours,
       duration: `${newHours}h 00m`,
-      cost: (prev.cost || 400) + 300,
+      cost: newTotal,
     }));
 
-    try {
-      // Update active ticket in AsyncStorage if it matches
-      const rawActive = await AsyncStorage.getItem("@parkzone_active_ticket");
-      if (rawActive) {
-        const parsed = JSON.parse(rawActive);
-        parsed.durationHours = newHours;
-        await AsyncStorage.setItem("@parkzone_active_ticket", JSON.stringify(parsed));
-      }
-    } catch { }
+    // Trigger mobile payment dial code in background for extension
+    if (derivedRate > 0) {
+      initiateMobilePayment(derivedRate).catch(() => {});
+    }
+
+    if (session.id) {
+      await supabase
+        .from("parking_tickets")
+        .update({ total_amount: newTotal, hours_elapsed: newHours })
+        .eq("id", session.id);
+    }
 
     Alert.alert(
       "Parking Extended",
-      `Your session in Slot ${session.bayNumber} has been extended by 1 hour (+300 RWF).\nNew departure time: ${exitTimeStr}`,
+      `Your session in Slot ${session.bayNumber} has been extended by 1 hour (+${derivedRate.toLocaleString()} ${session.currency || "RWF"}).\nPayment initiated in the background.\nNew departure time: ${exitTimeStr}`,
       [{ text: "OK" }]
     );
   };
 
-  // Handle End Parking -> Close booking directly if within prepaid duration, or pay overdue if exceeded
+  // Handle End Parking -> Close booking directly in database if within prepaid duration, or pay overdue if exceeded
   const handleEndParking = () => {
+    const rate =
+      session.hourlyRate ??
+      (session.cost && durationHours > 0 ? Math.round(session.cost / durationHours) : 0);
     const elapsedHours = Math.max(1, Math.ceil(elapsedSeconds / 3600));
     const extraHours = Math.max(0, elapsedHours - durationHours);
-    const overdueCost = extraHours * 300;
+    const overdueCost = extraHours * rate;
 
     if (overdueCost === 0) {
       Alert.alert(
@@ -183,17 +361,15 @@ export default function ParkingSessionScreen() {
             text: "Close Booking",
             onPress: async () => {
               try {
-                await AsyncStorage.removeItem("@parkzone_active_ticket");
-                const rawHistory = await AsyncStorage.getItem(PARKING_HISTORY_STORAGE_KEY);
-                if (rawHistory) {
-                  const history = JSON.parse(rawHistory);
-                  const idx = history.findIndex((h: any) => h.id === session.id || h.status === "Active");
-                  if (idx >= 0) {
-                    history[idx].status = "Completed";
-                    await AsyncStorage.setItem(PARKING_HISTORY_STORAGE_KEY, JSON.stringify(history));
-                  }
+                if (session.id) {
+                  await completeParkingSession({
+                    ticketId: session.id,
+                    spaceId: session.spaceId,
+                    paymentMethod: "wallet",
+                    amount: session.cost || durationHours * rate,
+                  });
                 }
-                Alert.alert("Booking Closed", "Parking session finished. Pre-paid booking covered this session in full.");
+                Alert.alert("Booking Closed", "Parking session finished in database.");
                 router.replace("/(tabs)/home");
               } catch {
                 router.replace("/(tabs)/home");
@@ -207,6 +383,7 @@ export default function ParkingSessionScreen() {
         pathname: "/transaction_details",
         params: {
           id: session.id,
+          spaceId: session.spaceId || "",
           name: session.name,
           address: session.address,
           bayNumber: session.bayNumber,
@@ -217,7 +394,7 @@ export default function ParkingSessionScreen() {
           durationHours: elapsedHours.toString(),
           cost: overdueCost.toString(),
           currency: session.currency || "RWF",
-          receiptNumber: session.receiptNumber || "309",
+          receiptNumber: session.receiptNumber || "-",
           entryTime: session.entryTime?.toString(),
           violationFine: "",
           violationReason: `Overtime (+${extraHours}h)`,
@@ -251,8 +428,113 @@ export default function ParkingSessionScreen() {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        {/* Circular Progress Dial */}
+        {/* Separated Service Badge: Parking Only (EV Charging Billed Separately) */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            width: "100%",
+            backgroundColor: theme.surface,
+            borderColor: theme.border,
+            borderWidth: 1,
+            borderRadius: 14,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
+            marginBottom: 8,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flex: 1 }}>
+            <Ionicons name="car-sport-outline" size={16} color={theme.text} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 12, fontWeight: "500", color: theme.text }}>
+                Parking Only •{" "}
+                {session.hourlyRate
+                  ? `${session.hourlyRate.toLocaleString()} ${session.currency || "RWF"}/hr${session.dailyCap ? ` (${session.dailyCap.toLocaleString()}/day cap)` : ""}`
+                  : "Live Facility Tariff"}
+              </Text>
+              <Text style={{ fontSize: 10.5, color: theme.textSecondary, marginTop: 1 }}>
+                Separated from EV Charging
+                {evCharger?.flatRateQuick && evCharger?.flatRateFull
+                  ? ` (${evCharger.flatRateQuick.toLocaleString()}–${evCharger.flatRateFull.toLocaleString()} ${session.currency || "RWF"} at EV Hubs)`
+                  : " (Billed separately at EV Hubs)"}
+              </Text>
+            </View>
+          </View>
+          {(evCharger !== null ||
+            session.zoneCode?.toLowerCase().includes("ev") ||
+            session.bayNumber.toLowerCase().startsWith("ev")) && (
+            <TouchableOpacity
+              onPress={() =>
+                router.replace({
+                  pathname: "/ev_charging",
+                  params: {
+                    locationId: session.locationId || "",
+                    chargerId: evCharger?.id || "",
+                    name: session.name,
+                    bayNumber: session.bayNumber,
+                    plate: session.plate || "",
+                    powerKw: evCharger?.powerKw ? String(evCharger.powerKw) : "",
+                    flatRateFull: evCharger?.flatRateFull ? String(evCharger.flatRateFull) : "",
+                    flatRateQuick: evCharger?.flatRateQuick ? String(evCharger.flatRateQuick) : "",
+                    currency: session.currency || "RWF",
+                  },
+                })
+              }
+              style={{
+                backgroundColor: theme.primaryBtnBg,
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                borderRadius: 10,
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={{ color: theme.primaryBtnText, fontSize: 10.5, fontWeight: "500" }}>
+                EV Charge
+              </Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Verified Pre-paid Badge */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            backgroundColor: theme.surface,
+            borderColor: theme.border,
+            borderWidth: 1,
+            paddingHorizontal: 12,
+            paddingVertical: 7,
+            borderRadius: 20,
+            marginBottom: 10,
+            alignSelf: "center",
+          }}
+        >
+          <Ionicons name="checkmark-circle" size={13} color="#10B981" />
+          <Text style={{ fontSize: 11.5, fontWeight: "600", color: theme.text }}>
+            Pre-paid & Verified ({(session.cost || 300).toLocaleString()} {session.currency || "RWF"})
+          </Text>
+        </View>
+
+        {/* Circular Progress Dial with Breathing Glow Animation */}
         <View style={styles.dialWrapper}>
+          {/* Animated Glow Aura */}
+          <Animated.View
+            style={[
+              styles.dialGlowAura,
+              {
+                width: svgSize + 24,
+                height: svgSize + 24,
+                borderRadius: (svgSize + 24) / 2,
+                backgroundColor: isOverdue ? theme.dangerSoft : theme.accentSoft,
+                opacity: glowOpacity,
+                transform: [{ scale: pulseAnim }],
+              },
+            ]}
+          />
+
           <View style={[styles.svgRingContainer, { width: svgSize, height: svgSize }]}>
             <Svg width={svgSize} height={svgSize} viewBox={`0 0 ${svgSize} ${svgSize}`}>
               {/* Background Circular Track */}
@@ -265,15 +547,15 @@ export default function ParkingSessionScreen() {
                 fill="none"
               />
 
-              {/* Active Progress Arc */}
-              <Circle
+              {/* Animated Active Progress Arc */}
+              <AnimatedCircle
                 cx={svgSize / 2}
                 cy={svgSize / 2}
                 r={radius}
                 stroke={activeColor}
                 strokeWidth={strokeWidth}
                 strokeDasharray={circumference}
-                strokeDashoffset={strokeDashoffset}
+                strokeDashoffset={animatedStrokeDashoffset as any}
                 strokeLinecap="round"
                 fill="none"
                 transform={`translate(${svgSize}, 0) scale(-1, 1) rotate(-90 ${svgSize / 2} ${svgSize / 2})`}
@@ -297,7 +579,7 @@ export default function ParkingSessionScreen() {
               ? isOverdue
                 ? `+${formatTimerDigits(elapsedSeconds - totalSeconds)}`
                 : formatTimerDigits(remainingSeconds)
-              : session.duration || "00:20:15"}
+              : session.duration || "00:00:00"}
           </Text>
 
           <Text style={[styles.timerSubLabel, { color: theme.textSecondary }]}>
@@ -307,11 +589,22 @@ export default function ParkingSessionScreen() {
 
         {/* Slot & Schedule Detail Card */}
         <View style={[styles.slotScheduleCard, { backgroundColor: theme.surface, borderColor: theme.border, shadowColor: theme.cardShadow }]}>
-          {/* Card Title */}
-          <View style={styles.cardHeaderRow}>
-            <Text style={[styles.slotTitleText, { color: theme.text }]}>
-              Slot {session.bayNumber}
-            </Text>
+          {/* Card Title with Space Image */}
+          <View style={[styles.cardHeaderRow, { flexDirection: "row", alignItems: "center", gap: 12 }]}>
+            {session.imageUrl ? (
+              <Image
+                source={{ uri: session.imageUrl }}
+                style={{ width: 46, height: 46, borderRadius: 12, borderWidth: 1, borderColor: theme.border }}
+              />
+            ) : null}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.slotTitleText, { color: theme.text }]}>
+                Slot {session.bayNumber}
+              </Text>
+              <Text style={{ fontSize: 12, color: theme.textSecondary, fontWeight: "400", marginTop: 2 }} numberOfLines={1}>
+                {session.name}
+              </Text>
+            </View>
           </View>
 
           {/* Timeline Row: Arrive after <---> [1 Hours] <---> Exit before */}
@@ -358,7 +651,7 @@ export default function ParkingSessionScreen() {
             onPress={() => {
               Alert.alert(
                 "Find My Vehicle",
-                `Your vehicle (${session.plate || "RAD 812 B"}) is parked at Slot ${session.bayNumber} in ${session.name}.\n\nFollow level markers to Zone ${session.zoneCode || "A"}.`,
+                `Your vehicle (${session.plate || "-"}) is parked at Slot ${session.bayNumber} in ${session.name}.${session.zoneCode ? `\n\nFollow level markers to ${session.zoneCode}.` : ""}`,
                 [
                   { text: "Dismiss", style: "cancel" },
                   {
@@ -476,7 +769,7 @@ export default function ParkingSessionScreen() {
               <View style={styles.receiptRow}>
                 <Text style={[styles.receiptLabel, { color: theme.textSecondary }]}>Slot:</Text>
                 <Text style={[styles.receiptVal, { color: theme.text }]}>
-                  {session.bayNumber} ({session.zoneCode || "Zone A"})
+                  {session.zoneCode ? `${session.bayNumber} (${session.zoneCode})` : session.bayNumber}
                 </Text>
               </View>
               <View style={styles.receiptRow}>
@@ -489,7 +782,7 @@ export default function ParkingSessionScreen() {
               </View>
               <View style={styles.receiptRow}>
                 <Text style={[styles.receiptLabel, { color: theme.textSecondary }]}>Total Paid:</Text>
-                <Text style={[styles.receiptVal, { color: "#10B981", fontWeight: "800" }]}>
+                <Text style={[styles.receiptVal, { color: theme.text, fontWeight: "500" }]}>
                   {session.cost?.toLocaleString()} {session.currency || "RWF"}
                 </Text>
               </View>
@@ -532,8 +825,7 @@ const styles = StyleSheet.create({
   },
   screenHeaderTitle: {
     fontSize: 18,
-    fontWeight: "700",
-    color: "#0F172A",
+    fontWeight: "600",
     textAlign: "center",
   },
   scrollContent: {
@@ -545,6 +837,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 8,
     marginBottom: 8,
+    position: "relative",
+  },
+  dialGlowAura: {
+    position: "absolute",
+    top: 6,
+    zIndex: 0,
   },
   svgRingContainer: {
     alignItems: "center",
@@ -558,27 +856,22 @@ const styles = StyleSheet.create({
   },
   timerDigitsBold: {
     fontSize: 44,
-    fontWeight: "900",
-    color: "#0F172A",
+    fontWeight: "700",
     letterSpacing: -0.5,
     fontVariant: ["tabular-nums"],
     marginTop: 16,
   },
   timerSubLabel: {
     fontSize: 13.5,
-    fontWeight: "500",
-    color: "#94A3B8",
+    fontWeight: "400",
     marginTop: 4,
   },
   slotScheduleCard: {
     width: "100%",
-    backgroundColor: "#FFFFFF",
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: "#F1F5F9",
     padding: 18,
     marginTop: 16,
-    shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.05,
     shadowRadius: 14,
@@ -589,8 +882,7 @@ const styles = StyleSheet.create({
   },
   slotTitleText: {
     fontSize: 18,
-    fontWeight: "800",
-    color: "#0F172A",
+    fontWeight: "600",
   },
   timelineRow: {
     flexDirection: "row",
@@ -603,14 +895,12 @@ const styles = StyleSheet.create({
   },
   timelineColLabel: {
     fontSize: 12,
-    fontWeight: "500",
-    color: "#94A3B8",
+    fontWeight: "400",
     marginBottom: 4,
   },
   timelineColTime: {
     fontSize: 15,
-    fontWeight: "800",
-    color: "#0F172A",
+    fontWeight: "600",
   },
   timelineCenterDivider: {
     flex: 1,
@@ -621,12 +911,9 @@ const styles = StyleSheet.create({
   timelineDottedLine: {
     flex: 1,
     height: 1,
-    backgroundColor: "#E2E8F0",
   },
   timelinePill: {
     borderWidth: 1.5,
-    borderColor: "#000",
-    backgroundColor: "#FFFFFF",
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 4,
@@ -634,8 +921,7 @@ const styles = StyleSheet.create({
   },
   timelinePillText: {
     fontSize: 11,
-    fontWeight: "700",
-    color: "#000",
+    fontWeight: "500",
   },
   fineWarningBox: {
     flexDirection: "row",
@@ -651,7 +937,7 @@ const styles = StyleSheet.create({
   fineWarningTitle: {
     color: "#EF4444",
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   fineWarningSub: {
     color: "#F87171",
@@ -672,8 +958,8 @@ const styles = StyleSheet.create({
   },
   findVehicleBtnText: {
     fontSize: 14,
-    fontWeight: "700",
-    color: "#050505ff",
+    fontWeight: "500",
+    color: "#09090B",
   },
   bottomActionsRow: {
     flexDirection: "row",
@@ -694,7 +980,7 @@ const styles = StyleSheet.create({
   extendTimeBtnText: {
     color: "#FFFFFF",
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   endParkingBtn: {
     flex: 1,
@@ -707,7 +993,7 @@ const styles = StyleSheet.create({
   endParkingBtnText: {
     color: "#FFFFFF",
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   receiptOverlay: {
     flex: 1,
@@ -728,7 +1014,7 @@ const styles = StyleSheet.create({
   },
   receiptHeaderBrand: {
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 0.5,
   },
   receiptHeaderSub: {
@@ -759,7 +1045,7 @@ const styles = StyleSheet.create({
   },
   receiptVal: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   receiptDoneBtn: {
     borderRadius: 16,
@@ -768,6 +1054,6 @@ const styles = StyleSheet.create({
   },
   receiptDoneBtnText: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
   },
 });

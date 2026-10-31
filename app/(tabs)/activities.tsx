@@ -32,123 +32,178 @@ import Svg, {
 } from "react-native-svg";
 import { supabase } from "../lib/supabase";
 import { useTheme } from "../../hooks/useTheme";
+import { ActivitiesSkeleton } from "../../components/SkeletonLoader";
 import {
-  PARKING_HISTORY,
-  PARKING_HISTORY_STORAGE_KEY,
+  completeParkingSession,
+  fetchActiveParkingTicket,
+  fetchUserParkingHistory,
+  fetchUserVehicles,
+  resolveSpaceImageUrl,
   ParkingHistoryRecord,
-} from "../recent_parkings";
+} from "../services/parking";
+import { initiateMobilePayment } from "../services/mobilePayment";
 
 const { width } = Dimensions.get("window");
 
 export interface ActiveSessionData {
   id: string;
+  spaceId?: string;
   plate: string;
   entryTime: Date;
   spaceNumber: string;
   locationName: string;
+  imageUrl?: string;
   durationHours: number;
   hourlyRate: number;
+  receiptNumber?: string;
   violationFine?: number;
   violationReason?: string;
 }
 
 /**
- * Modern SVG Illustration: Empty Parking Bay (No Session)
- * Completely eliminates the "00:00:00" countdown dial and displays an
- * ambient, luxury vector artwork with glowing parking bay boundaries.
+ * Modern SVG Illustration: Open History Logbook / Ledger (No Active Session)
+ * Displays an open architectural logbook with ruled entry lines and a bookmark ribbon.
  */
 const EmptySessionIllustration = ({ isDark }: { isDark: boolean }) => {
+  const coverStroke = isDark ? "rgba(255,255,255,0.22)" : "rgba(9,9,11,0.18)";
+  const pageStroke = isDark ? "rgba(255,255,255,0.28)" : "rgba(9,9,11,0.22)";
+  const ruleColor = isDark ? "rgba(255,255,255,0.28)" : "rgba(9,9,11,0.22)";
+  const accentColor = isDark ? "#FFFFFF" : "#09090B";
+
   return (
     <View style={svgStyles.container}>
       <Svg width={220} height={130} viewBox="0 0 220 130">
         <Defs>
-          <LinearGradient id="groundGrad" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0%" stopColor={isDark ? "#27272A" : "#E4E4E7"} stopOpacity={0.6} />
-            <Stop offset="100%" stopColor={isDark ? "#09090B" : "#F4F4F5"} stopOpacity={0.9} />
+          <LinearGradient id="bookCoverGrad" x1="0" y1="0" x2="1" y2="1">
+            <Stop offset="0%" stopColor={isDark ? "#27272A" : "#D4D4D8"} stopOpacity={0.95} />
+            <Stop offset="100%" stopColor={isDark ? "#18181B" : "#A1A1AA"} stopOpacity={0.95} />
           </LinearGradient>
-          <LinearGradient id="badgeGrad" x1="0" y1="0" x2="0" y2="1">
-            <Stop offset="0%" stopColor={isDark ? "#3F3F46" : "#A1A1AA"} stopOpacity={0.9} />
-            <Stop offset="100%" stopColor={isDark ? "#18181B" : "#71717A"} stopOpacity={0.95} />
+          <LinearGradient id="leftPageGrad" x1="0" y1="0" x2="1" y2="0">
+            <Stop offset="0%" stopColor={isDark ? "#27272A" : "#FFFFFF"} stopOpacity={1} />
+            <Stop offset="100%" stopColor={isDark ? "#1F1F23" : "#F4F4F5"} stopOpacity={1} />
           </LinearGradient>
-          <RadialGradient id="pulseGrad" cx="50%" cy="50%" rx="50%" ry="50%">
-            <Stop offset="0%" stopColor="#10B981" stopOpacity={0.35} />
-            <Stop offset="100%" stopColor="#10B981" stopOpacity={0} />
+          <LinearGradient id="rightPageGrad" x1="0" y1="0" x2="1" y2="0">
+            <Stop offset="0%" stopColor={isDark ? "#1F1F23" : "#F4F4F5"} stopOpacity={1} />
+            <Stop offset="100%" stopColor={isDark ? "#27272A" : "#FFFFFF"} stopOpacity={1} />
+          </LinearGradient>
+          <RadialGradient id="bookHaloGrad" cx="50%" cy="55%" rx="50%" ry="50%">
+            <Stop offset="0%" stopColor={accentColor} stopOpacity={0.14} />
+            <Stop offset="100%" stopColor={accentColor} stopOpacity={0} />
           </RadialGradient>
         </Defs>
 
-        {/* Ambient Radar Glow Under Bay */}
-        <Circle cx="110" cy="85" r="50" fill="url(#pulseGrad)" />
+        {/* Soft Ambient Halo Behind Logbook */}
+        <Circle cx="110" cy="70" r="56" fill="url(#bookHaloGrad)" />
 
-        {/* Isometric Parking Bay Base Platform */}
-        <Path
-          d="M 32 85 L 110 46 L 188 85 L 110 122 Z"
-          fill="url(#groundGrad)"
-          stroke={isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.1)"}
-          strokeWidth={1.5}
-        />
-
-        {/* Crisp Dashed Bay Markings */}
-        <Path
-          d="M 52 75 L 105 49"
-          stroke={isDark ? "#FFFFFF" : "#09090B"}
-          strokeWidth={2}
-          strokeDasharray="6,4"
-          strokeOpacity={0.45}
-        />
-        <Path
-          d="M 168 75 L 115 49"
-          stroke={isDark ? "#FFFFFF" : "#09090B"}
-          strokeWidth={2}
-          strokeDasharray="6,4"
-          strokeOpacity={0.45}
+        {/* Hardcover Base Backdrop */}
+        <Rect
+          x="42"
+          y="34"
+          width="136"
+          height="72"
+          rx="8"
+          fill="url(#bookCoverGrad)"
+          stroke={coverStroke}
+          strokeWidth={1.4}
         />
 
-        {/* Central Parking "P" Emblem Ground Inset */}
-        <Circle
-          cx="110" cy="84" r="20"
-          fill="url(#badgeGrad)"
-          stroke={isDark ? "rgba(255,255,255,0.25)" : "rgba(0,0,0,0.2)"}
-          strokeWidth={1.5}
-        />
+        {/* Open Left Page */}
         <Path
-          d="M 105 95 V 73 H 112 C 115.5 73 118 75.5 118 79 C 118 82.5 115.5 85 112 85 H 105"
-          stroke="#FFFFFF"
-          strokeWidth={2.6}
-          strokeLinecap="round"
+          d="M 110 36 C 92 29 66 29 48 35 L 48 98 C 66 92 92 92 110 99 Z"
+          fill="url(#leftPageGrad)"
+          stroke={pageStroke}
+          strokeWidth={1.4}
           strokeLinejoin="round"
+        />
+
+        {/* Open Right Page */}
+        <Path
+          d="M 110 36 C 128 29 154 29 172 35 L 172 98 C 154 92 128 92 110 99 Z"
+          fill="url(#rightPageGrad)"
+          stroke={pageStroke}
+          strokeWidth={1.4}
+          strokeLinejoin="round"
+        />
+
+        {/* Center Spine Seam */}
+        <Path
+          d="M 110 36 L 110 101"
+          stroke={pageStroke}
+          strokeWidth={1.6}
+          strokeLinecap="round"
+        />
+
+        {/* Left Page Ruled Log Lines */}
+        <Path
+          d="M 59 50 Q 79 46 98 51"
+          stroke={accentColor}
+          strokeWidth={2}
+          strokeOpacity={0.55}
+          strokeLinecap="round"
           fill="none"
         />
-
-        {/* Concentric Telemetry Radar Arcs (Standby Signal) */}
         <Path
-          d="M 85 36 Q 110 24 135 36"
-          stroke={isDark ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.18)"}
+          d="M 59 62 Q 79 58 98 63"
+          stroke={ruleColor}
           strokeWidth={1.8}
           strokeLinecap="round"
           fill="none"
         />
         <Path
-          d="M 94 43 Q 110 33 126 43"
-          stroke={isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.3)"}
-          strokeWidth={2}
+          d="M 59 73 Q 79 69 98 74"
+          stroke={ruleColor}
+          strokeWidth={1.8}
           strokeLinecap="round"
           fill="none"
         />
         <Path
-          d="M 102 50 Q 110 44 118 50"
-          stroke={isDark ? "rgba(255,255,255,0.8)" : "rgba(0,0,0,0.6)"}
-          strokeWidth={2.2}
+          d="M 59 84 Q 75 81 88 84"
+          stroke={ruleColor}
+          strokeWidth={1.8}
           strokeLinecap="round"
           fill="none"
         />
 
-        {/* Modern Status Signal Pin */}
-        <Circle cx="110" cy="18" r="7" fill="#10B981" opacity={0.2} />
-        <Circle cx="110" cy="18" r="3.5" fill="#10B981" />
+        {/* Right Page Ruled Log Lines */}
+        <Path
+          d="M 122 51 Q 134 48 144 49"
+          stroke={ruleColor}
+          strokeWidth={1.8}
+          strokeLinecap="round"
+          fill="none"
+        />
+        <Path
+          d="M 122 63 Q 141 58 160 62"
+          stroke={ruleColor}
+          strokeWidth={1.8}
+          strokeLinecap="round"
+          fill="none"
+        />
+        <Path
+          d="M 122 74 Q 141 69 160 73"
+          stroke={ruleColor}
+          strokeWidth={1.8}
+          strokeLinecap="round"
+          fill="none"
+        />
+        <Path
+          d="M 122 84 Q 137 81 151 83"
+          stroke={ruleColor}
+          strokeWidth={1.8}
+          strokeLinecap="round"
+          fill="none"
+        />
 
-        {/* Minimalist Floating Accent Sparkles */}
-        <Circle cx="45" cy="40" r="2" fill={isDark ? "#FFFFFF" : "#71717A"} opacity={0.5} />
-        <Circle cx="175" cy="42" r="2.5" fill={isDark ? "#FFFFFF" : "#71717A"} opacity={0.4} />
+        {/* Bookmark Ribbon on Right Page */}
+        <Path
+          d="M 150 32 L 150 56 L 155.5 51.5 L 161 56 L 161 33.5 Z"
+          fill={accentColor}
+          opacity={0.9}
+        />
+
+        {/* Subtle Floating Accent Dots */}
+        <Circle cx="34" cy="54" r="2" fill={accentColor} opacity={0.35} />
+        <Circle cx="186" cy="50" r="2.2" fill={accentColor} opacity={0.3} />
       </Svg>
     </View>
   );
@@ -168,12 +223,12 @@ const Activities = () => {
 
   // Active Session & History Tickets
   const [activeTicket, setActiveTicket] = useState<ActiveSessionData | null>(null);
-  const [parkingHistory, setParkingHistory] = useState<ParkingHistoryRecord[]>(PARKING_HISTORY);
+  const [parkingHistory, setParkingHistory] = useState<ParkingHistoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [currentTick, setCurrentTick] = useState(Date.now());
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeFilter, setActiveFilter] = useState<"All" | "Completed" | "Active" | "Fines">("All");
+  const [activeFilter, setActiveFilter] = useState<"All" | "Active" | "Incomplete" | "Completed" | "Fines">("All");
   const [selectedInvoice, setSelectedInvoice] = useState<ParkingHistoryRecord | null>(null);
 
   // Hide tab bar when invoice modal is open
@@ -220,89 +275,111 @@ const Activities = () => {
     return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
   };
 
-  // Comprehensive Data Sync: Catches recent parkings from AsyncStorage and Supabase
+  // Comprehensive Data Sync from database
   const loadData = useCallback(async () => {
     try {
-      // 1. Load active ticket from AsyncStorage
-      const rawActive = await AsyncStorage.getItem("@parkzone_active_ticket");
-      if (rawActive) {
-        const parsed = JSON.parse(rawActive);
-        if (parsed && parsed.spaceNumber) {
-          setActiveTicket({
-            id: parsed.id || `ticket-${Date.now()}`,
-            plate: parsed.plate || "RAD ••• B",
-            entryTime: parsed.entryTime ? new Date(parsed.entryTime) : new Date(),
-            spaceNumber: parsed.spaceNumber,
-            locationName: parsed.locationName || "Kigali Marina Parking",
-            durationHours: parsed.durationHours || 2,
-            hourlyRate: parsed.hourlyRate || 300,
-            violationFine: parsed.violationFine,
-            violationReason: parsed.violationReason,
-          });
-        }
+      const { data: { user } } = await supabase.auth.getUser();
+      const uid = user?.id;
+
+      // 1. Load active ticket directly from database
+      const liveTicket = await fetchActiveParkingTicket(uid);
+      if (liveTicket) {
+        const loc = Array.isArray(liveTicket.parking_locations)
+          ? liveTicket.parking_locations[0]
+          : liveTicket.parking_locations;
+        const sp = Array.isArray(liveTicket.parking_spaces)
+          ? liveTicket.parking_spaces[0]
+          : liveTicket.parking_spaces;
+
+        const hourlyRate = Number(liveTicket.hourly_rate) || Number(loc?.hourly_rate) || 300;
+        const paidOrTotal = Number(liveTicket.total_amount) || hourlyRate;
+        const derivedHours = Math.max(1, Math.round(paidOrTotal / hourlyRate));
+
+        setActiveTicket({
+          id: liveTicket.id,
+          spaceId: liveTicket.space_id || sp?.id,
+          plate: liveTicket.vehicle_plate,
+          entryTime: new Date(liveTicket.entry_time),
+          spaceNumber: sp?.space_number || "-",
+          locationName: loc?.name || "Parking Facility",
+          imageUrl:
+            sp?.image_url?.trim() ||
+            loc?.image_url?.trim() ||
+            resolveSpaceImageUrl(
+              `${loc?.id || loc?.name || "lot"}-${sp?.space_number || liveTicket.id}`,
+              sp?.space_type || "regular"
+            ),
+          durationHours: derivedHours,
+          hourlyRate,
+          receiptNumber: liveTicket.ticket_number,
+        });
       } else {
         setActiveTicket(null);
       }
 
-      // 2. Load recent parking history from AsyncStorage
-      const rawHistory = await AsyncStorage.getItem(PARKING_HISTORY_STORAGE_KEY);
-      let loadedRecords: ParkingHistoryRecord[] = [];
-      if (rawHistory) {
-        const parsed = JSON.parse(rawHistory);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          loadedRecords = parsed;
-        }
-      }
+      // 2. Load combined parking & EV charging history from database
+      const dbHistory = await fetchUserParkingHistory(uid);
+      const mergedRecords: ParkingHistoryRecord[] = [...(dbHistory as ParkingHistoryRecord[])];
 
-      // Fallback to initial seeds if storage is blank
-      if (loadedRecords.length === 0) {
-        loadedRecords = PARKING_HISTORY;
-        AsyncStorage.setItem(PARKING_HISTORY_STORAGE_KEY, JSON.stringify(PARKING_HISTORY)).catch(
-          () => { }
-        );
-      }
+      // 3. Merge any municipal fines issued to user's vehicles from database
+      if (uid) {
+        const vehicles = await fetchUserVehicles(uid);
+        const plates = vehicles.map((v) => v.plate_number).filter(Boolean);
+        if (plates.length > 0) {
+          const { data: fines } = await supabase
+            .from("parking_fines")
+            .select(`
+              id, fine_number, vehicle_plate, fine_amount, currency, reason,
+              payment_status, issued_at,
+              parking_locations:location_id (*),
+              parking_spaces:space_id (*)
+            `)
+            .in("vehicle_plate", plates)
+            .order("issued_at", { ascending: false })
+            .limit(20);
 
-      // 3. Optional Supabase tickets merge
-      try {
-        const { data: supaTickets } = await supabase
-          .from("parking_tickets")
-          .select(`
-            id, ticket_number, vehicle_plate, entry_time, exit_time,
-            status, hourly_rate, total_amount, payment_status,
-            parking_locations:location_id (name, address),
-            parking_spaces:space_id (space_number, zone_code)
-          `)
-          .order("created_at", { ascending: false })
-          .limit(10);
-
-        if (supaTickets && supaTickets.length > 0) {
-          supaTickets.forEach((t: any) => {
-            const exists = loadedRecords.some((r) => r.id === t.id || r.receiptNumber === t.ticket_number);
-            if (!exists) {
-              const supaRecord: ParkingHistoryRecord = {
-                id: t.id,
-                name: t.parking_locations?.name || "Kigali Hub",
-                address: t.parking_locations?.address || "Kigali CBD",
-                bayNumber: t.parking_spaces?.space_number || "Bay 01",
-                zoneCode: t.parking_spaces?.zone_code || "Zone A",
-                plate: t.vehicle_plate || "RAD 812 B",
-                date: new Date(t.entry_time).toLocaleDateString([], { month: "short", day: "numeric" }),
-                duration: "1h 30m",
-                cost: t.total_amount || 300,
-                currency: "RWF",
-                status: t.status === "active" ? "Active" : "Completed",
-                image: "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=400&q=80",
-                receiptNumber: t.ticket_number || `PZ-${Date.now().toString().slice(-6)}`,
-              };
-              loadedRecords.unshift(supaRecord);
-            }
+          (fines || []).forEach((f: any) => {
+            const loc = Array.isArray(f.parking_locations) ? f.parking_locations[0] : f.parking_locations;
+            const sp = Array.isArray(f.parking_spaces) ? f.parking_spaces[0] : f.parking_spaces;
+            const fineSpaceImage =
+              sp?.image_url?.trim() ||
+              loc?.image_url?.trim() ||
+              resolveSpaceImageUrl(
+                `${loc?.id || loc?.name || "fine"}-${sp?.space_number || f.id}`,
+                sp?.space_type || "regular"
+              );
+            const isPaid = f.payment_status === "paid";
+            mergedRecords.push({
+              id: f.id,
+              name: loc?.name || "Municipal Enforcement",
+              address: loc?.address || "",
+              bayNumber: sp?.space_number || "-",
+              zoneCode: sp?.zone_code || "Zone A",
+              plate: f.vehicle_plate,
+              date: new Date(f.issued_at).toLocaleDateString([], { month: "short", day: "numeric" }),
+              duration: "Citation",
+              cost: Number(f.fine_amount) || 0,
+              currency: f.currency || "RWF",
+              status: isPaid ? "Completed" : "Active",
+              isCompleted: isPaid,
+              isIncomplete: !isPaid,
+              image: fineSpaceImage,
+              receiptNumber: f.fine_number,
+              entryTimeIso: f.issued_at,
+              violationFine: Number(f.fine_amount) || 0,
+              violationReason: f.reason || "Municipal citation",
+            });
           });
         }
-      } catch {
-        // Supabase offline/unavailable, fallback gracefully
       }
 
-      setParkingHistory(loadedRecords);
+      mergedRecords.sort((a, b) => {
+        const timeA = a.entryTimeIso ? new Date(a.entryTimeIso).getTime() : 0;
+        const timeB = b.entryTimeIso ? new Date(b.entryTimeIso).getTime() : 0;
+        return timeB - timeA;
+      });
+
+      setParkingHistory(mergedRecords);
     } catch (err) {
       console.warn("loadData error:", err);
     } finally {
@@ -323,7 +400,7 @@ const Activities = () => {
     loadData();
   };
 
-  // End active parking session - avoids double payment for pre-paid sessions
+  // End active parking session in database
   const handleEndParking = () => {
     if (!activeTicket) return;
 
@@ -335,27 +412,25 @@ const Activities = () => {
     if (overdueCost === 0) {
       Alert.alert(
         "Close Booking",
-        `Spot: ${activeTicket.spaceNumber} (${activeTicket.locationName})\nElapsed Time: ${formatTimer(elapsedSeconds)}\nBooked Duration: ${prepaidHours} Hour(s) (Pre-paid)\nTotal Extra Due: 0 RWF\n\nYour session was already paid before booking.`,
+        `Spot: ${activeTicket.spaceNumber} (${activeTicket.locationName})\nElapsed Time: ${formatTimer(elapsedSeconds)}\nBooked Duration: ${prepaidHours} Hour(s)\nTotal Extra Due: 0 RWF`,
         [
           { text: "Cancel", style: "cancel" },
           {
             text: "Close Booking",
             onPress: async () => {
               try {
-                await AsyncStorage.removeItem("@parkzone_active_ticket");
+                const totalAmount = prepaidHours * (activeTicket.hourlyRate || 300);
+                await completeParkingSession({
+                  ticketId: activeTicket.id,
+                  spaceId: activeTicket.spaceId,
+                  paymentMethod: "wallet",
+                  amount: totalAmount,
+                });
+                await AsyncStorage.removeItem("@parkzone_active_ticket").catch(() => {});
                 setActiveTicket(null);
-                const rawHistory = await AsyncStorage.getItem(PARKING_HISTORY_STORAGE_KEY);
-                if (rawHistory) {
-                  const history = JSON.parse(rawHistory);
-                  const idx = history.findIndex((h: any) => h.id === activeTicket.id || h.status === "Active");
-                  if (idx >= 0) {
-                    history[idx].status = "Completed";
-                    await AsyncStorage.setItem(PARKING_HISTORY_STORAGE_KEY, JSON.stringify(history));
-                  }
-                }
-                loadData();
-                Alert.alert("Booking Closed", "Parking session finished. Pre-paid booking covered this session in full.");
-              } catch { }
+                await loadData();
+                Alert.alert("Booking Closed", "Parking session finished and synced to database.");
+              } catch {}
             },
           },
         ]
@@ -365,6 +440,7 @@ const Activities = () => {
         pathname: "/transaction_details",
         params: {
           id: activeTicket.id,
+          spaceId: activeTicket.spaceId || "",
           name: activeTicket.locationName,
           bayNumber: activeTicket.spaceNumber,
           plate: activeTicket.plate,
@@ -372,7 +448,7 @@ const Activities = () => {
           durationHours: elapsedHours.toString(),
           cost: overdueCost.toString(),
           currency: "RWF",
-          receiptNumber: "309",
+          receiptNumber: activeTicket.receiptNumber || activeTicket.id.slice(0, 8),
           entryTime: activeTicket.entryTime.toISOString(),
           violationFine: "",
           violationReason: `Overtime (+${extraHours}h)`,
@@ -384,25 +460,40 @@ const Activities = () => {
     }
   };
 
-  const handleExtendTime = () => {
+  const handleExtendTime = async () => {
     if (!activeTicket) return;
-    const updated = {
+    const addedRate = activeTicket.hourlyRate || 300;
+    const newHours = (activeTicket.durationHours || 1) + 1;
+    const newTotal = newHours * addedRate;
+
+    // Trigger mobile payment dial code in background for extension
+    initiateMobilePayment(addedRate).catch(() => {});
+
+    await supabase
+      .from("parking_tickets")
+      .update({ total_amount: newTotal, hours_elapsed: newHours })
+      .eq("id", activeTicket.id);
+    setActiveTicket({
       ...activeTicket,
-      durationHours: (activeTicket.durationHours || 2) + 1,
-    };
-    setActiveTicket(updated);
-    AsyncStorage.setItem("@parkzone_active_ticket", JSON.stringify(updated)).catch(() => { });
-    Alert.alert("Hold Extended", "Added +1 hour to your parking session.");
+      durationHours: newHours,
+    });
+    Alert.alert(
+      "Parking Extended",
+      `Added +1 hour to your parking session (+${addedRate.toLocaleString()} RWF).\nPayment initiated in the background.`
+    );
   };
 
   // Filtered recent parking history
   const filteredHistory = useMemo(() => {
     return parkingHistory.filter((item) => {
-      // Filter tab check
-      if (activeFilter === "Completed" && item.status !== "Completed" && item.status !== "Closed") {
+      // Filter tab check (supporting completed and incomplete sessions)
+      if (activeFilter === "Active" && item.status !== "Active") {
         return false;
       }
-      if (activeFilter === "Active" && item.status !== "Active") {
+      if (activeFilter === "Completed" && item.status !== "Completed") {
+        return false;
+      }
+      if (activeFilter === "Incomplete" && (item.status === "Completed" || item.isCompleted)) {
         return false;
       }
       if (activeFilter === "Fines" && !item.violationFine) {
@@ -495,13 +586,22 @@ const Activities = () => {
     const exitStr = new Date(exitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
     return (
-      <View style={styles.activeSessionCard}>
+      <View
+        style={[
+          styles.activeSessionCard,
+          {
+            backgroundColor: theme.surface,
+            borderColor: theme.border,
+            shadowColor: theme.cardShadow,
+          },
+        ]}
+      >
         {/* Header Badge */}
         <View style={styles.activeCardHeader}>
-          <Text style={styles.activeCardTitleText}>Parking Session</Text>
-          <View style={styles.liveIndicatorRow}>
-            <View style={styles.livePulsingDot} />
-            <Text style={styles.liveBadgeText}>LIVE</Text>
+          <Text style={[styles.activeCardTitleText, { color: theme.text }]}>Parking Session</Text>
+          <View style={[styles.liveIndicatorRow, { backgroundColor: theme.accentSoft, borderWidth: 1, borderColor: theme.border }]}>
+            <View style={[styles.livePulsingDot, { backgroundColor: theme.accent }]} />
+            <Text style={[styles.liveBadgeText, { color: theme.text }]}>LIVE</Text>
           </View>
         </View>
 
@@ -513,7 +613,7 @@ const Activities = () => {
                 cx={cardSvgSize / 2}
                 cy={cardSvgSize / 2}
                 r={cardRadius}
-                stroke="#EEF2F6"
+                stroke={theme.pillInactiveBg}
                 strokeWidth={cardStroke}
                 fill="none"
               />
@@ -521,7 +621,7 @@ const Activities = () => {
                 cx={cardSvgSize / 2}
                 cy={cardSvgSize / 2}
                 r={cardRadius}
-                stroke={isOverdue ? "#EF4444" : "#000"}
+                stroke={isOverdue ? theme.danger : theme.accent}
                 strokeWidth={cardStroke}
                 strokeDasharray={cardCircumference}
                 strokeDashoffset={cardDashoffset}
@@ -533,48 +633,63 @@ const Activities = () => {
                 cx={cardSvgSize / 2}
                 cy={cardSvgSize / 2 - cardRadius}
                 r={cardStroke / 2 - 1}
-                fill="#000"
-                stroke="#FFFFFF"
+                fill={isOverdue ? theme.danger : theme.accent}
+                stroke={theme.surface}
                 strokeWidth={2.5}
               />
             </Svg>
           </View>
 
           {/* Large Bold Digital Timer */}
-          <Text style={styles.activeTimerDigitsBold}>
+          <Text style={[styles.activeTimerDigitsBold, { color: theme.text }]}>
             {isOverdue ? `+${formatTimer(elapsedSeconds - totalBookedSeconds)}` : formatTimer(remSecs)}
           </Text>
-          <Text style={styles.activeTimerSubLabel}>Remaining Parking Time</Text>
+          <Text style={[styles.activeTimerSubLabel, { color: theme.textSecondary }]}>Remaining Parking Time</Text>
         </View>
 
         {/* Slot Detail Box */}
-        <View style={styles.activeSlotInnerCard}>
-          <Text style={styles.activeSlotTitleText}>Slot {activeTicket.spaceNumber}</Text>
+        <View style={[styles.activeSlotInnerCard, { backgroundColor: theme.background, borderColor: theme.border }]}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 12 }}>
+            {activeTicket.imageUrl ? (
+              <Image
+                source={{ uri: activeTicket.imageUrl }}
+                style={{ width: 44, height: 44, borderRadius: 10, borderWidth: 1, borderColor: theme.border }}
+              />
+            ) : null}
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.activeSlotTitleText, { color: theme.text, marginBottom: 2 }]}>
+                Slot {activeTicket.spaceNumber}
+              </Text>
+              <Text style={{ fontSize: 11.5, color: theme.textSecondary, fontWeight: "400" }} numberOfLines={1}>
+                {activeTicket.locationName}
+              </Text>
+            </View>
+          </View>
 
           <View style={styles.activeTimelineRow}>
             <View style={{ minWidth: 65 }}>
-              <Text style={styles.activeTimelineLabel}>Arrive after</Text>
-              <Text style={styles.activeTimelineTime}>{arriveStr}</Text>
+              <Text style={[styles.activeTimelineLabel, { color: theme.textSecondary }]}>Arrive after</Text>
+              <Text style={[styles.activeTimelineTime, { color: theme.text }]}>{arriveStr}</Text>
             </View>
 
             <View style={styles.activeTimelineCenter}>
-              <View style={styles.activeTimelineLine} />
-              <View style={styles.activeTimelinePill}>
-                <Text style={styles.activeTimelinePillText}>{activeTicket.durationHours} Hours</Text>
+              <View style={[styles.activeTimelineLine, { backgroundColor: theme.border }]} />
+              <View style={[styles.activeTimelinePill, { borderColor: theme.accent, backgroundColor: theme.surface }]}>
+                <Text style={[styles.activeTimelinePillText, { color: theme.text }]}>{activeTicket.durationHours} Hours</Text>
               </View>
-              <View style={styles.activeTimelineLine} />
+              <View style={[styles.activeTimelineLine, { backgroundColor: theme.border }]} />
             </View>
 
             <View style={{ minWidth: 65, alignItems: "flex-end" }}>
-              <Text style={styles.activeTimelineLabel}>Exit before</Text>
-              <Text style={styles.activeTimelineTime}>{exitStr}</Text>
+              <Text style={[styles.activeTimelineLabel, { color: theme.textSecondary }]}>Exit before</Text>
+              <Text style={[styles.activeTimelineTime, { color: theme.text }]}>{exitStr}</Text>
             </View>
           </View>
 
           {/* Municipal Violation Fine Warning Badge (if applicable) */}
           {activeTicket.violationFine ? (
             <View style={styles.activeViolationFineBanner}>
-              <Ionicons name="warning" size={15} color="#EF4444" />
+              <Ionicons name="warning" size={15} color={theme.danger} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.activeViolationFineTitle}>
                   +{activeTicket.violationFine.toLocaleString()} RWF Fine Applied
@@ -587,7 +702,7 @@ const Activities = () => {
           ) : null}
 
           <TouchableOpacity
-            style={styles.activeFindVehicleBtn}
+            style={[styles.activeFindVehicleBtn, { borderColor: theme.accent, backgroundColor: theme.surface }]}
             onPress={() => {
               Alert.alert(
                 "Find My Vehicle",
@@ -597,23 +712,23 @@ const Activities = () => {
             }}
             activeOpacity={0.8}
           >
-            <Ionicons name="location-outline" size={16} color="#000" />
-            <Text style={styles.activeFindVehicleBtnText}>Find My Vehicle</Text>
+            <Ionicons name="location-outline" size={16} color={theme.text} />
+            <Text style={[styles.activeFindVehicleBtnText, { color: theme.text }]}>Find My Vehicle</Text>
           </TouchableOpacity>
         </View>
 
         {/* Action Buttons Row: Extend Time & End Parking */}
         <View style={styles.activeActionsRow}>
           <TouchableOpacity
-            style={styles.activeExtendBtn}
+            style={[styles.activeExtendBtn, { backgroundColor: theme.primaryBtnBg }]}
             onPress={handleExtendTime}
             activeOpacity={0.85}
           >
-            <Text style={styles.activeExtendBtnText}>Extend Time</Text>
+            <Text style={[styles.activeExtendBtnText, { color: theme.primaryBtnText }]}>Extend Time</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={styles.activeEndBtn}
+            style={[styles.activeEndBtn, { backgroundColor: theme.danger }]}
             onPress={handleEndParking}
             activeOpacity={0.85}
           >
@@ -630,6 +745,11 @@ const Activities = () => {
   const renderHistoryItem = ({ item }: { item: ParkingHistoryRecord }) => {
     const isCompleted = item.status === "Completed" || item.status === "Closed";
     const hasFine = Boolean(item.violationFine);
+    const isEvSession = Boolean(
+      item.zoneCode?.toLowerCase().includes("ev") ||
+      item.duration?.toLowerCase().includes("charging") ||
+      item.name?.toLowerCase().includes("ev")
+    );
 
     return (
       <TouchableOpacity
@@ -637,7 +757,7 @@ const Activities = () => {
           styles.historyCard,
           {
             backgroundColor: theme.surface,
-            borderColor: theme.border,
+            borderColor: isEvSession ? theme.evGreenBorder : theme.border,
             shadowColor: theme.cardShadow,
           },
         ]}
@@ -664,7 +784,13 @@ const Activities = () => {
         }}
         activeOpacity={0.85}
       >
-        <Image source={{ uri: item.image }} style={styles.historyThumbImg} />
+        {item.image ? (
+          <Image source={{ uri: item.image }} style={styles.historyThumbImg} />
+        ) : (
+          <View style={[styles.historyThumbImg, { backgroundColor: theme.background, borderWidth: 1, borderColor: theme.border, alignItems: "center", justifyContent: "center" }]}>
+            <Ionicons name="car-sport-outline" size={22} color={theme.textSecondary} />
+          </View>
+        )}
 
         <View style={styles.historyCardCenter}>
           <View style={styles.historyTitleRow}>
@@ -675,18 +801,26 @@ const Activities = () => {
               style={[
                 styles.historyStatusPill,
                 {
-                  backgroundColor: isCompleted
-                    ? theme.isDark
-                      ? "rgba(255,255,255,0.08)"
-                      : "rgba(0,0,0,0.06)"
-                    : "rgba(16, 185, 129, 0.15)",
+                  backgroundColor: isEvSession
+                    ? theme.evGreenSoft
+                    : isCompleted
+                      ? theme.pillInactiveBg
+                      : theme.pillActiveBg,
+                  borderWidth: isEvSession ? 1 : 0,
+                  borderColor: isEvSession ? theme.evGreenBorder : "transparent",
                 },
               ]}
             >
               <Text
                 style={[
                   styles.historyStatusPillText,
-                  { color: isCompleted ? theme.textSecondary : "#10B981" },
+                  {
+                    color: isEvSession
+                      ? theme.evGreen
+                      : isCompleted
+                        ? theme.textSecondary
+                        : theme.pillActiveText,
+                  },
                 ]}
               >
                 {item.status}
@@ -795,7 +929,7 @@ const Activities = () => {
 
         {/* Filter Pills Row */}
         <View style={styles.filterPillsRow}>
-          {(["All", "Completed", "Active", "Fines"] as const).map((cat) => {
+          {(["All", "Active", "Incomplete", "Completed", "Fines"] as const).map((cat) => {
             const isSelected = activeFilter === cat;
             return (
               <TouchableOpacity
@@ -826,9 +960,7 @@ const Activities = () => {
 
       {/* Main List */}
       {loading && !refreshing ? (
-        <View style={styles.centered}>
-          <ActivityIndicator size="large" color={theme.text} />
-        </View>
+        <ActivitiesSkeleton />
       ) : (
         <FlatList
           data={filteredHistory}
@@ -847,12 +979,26 @@ const Activities = () => {
           renderItem={renderHistoryItem}
           ListEmptyComponent={
             <View style={[styles.emptyBox, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-              <Ionicons name="file-tray-outline" size={32} color={theme.textSecondary} style={{ marginBottom: 8 }} />
+              <View
+                style={{
+                  width: 56,
+                  height: 56,
+                  borderRadius: 28,
+                  backgroundColor: theme.isDark ? "rgba(255,255,255,0.06)" : "rgba(9,9,11,0.04)",
+                  borderWidth: 1,
+                  borderColor: theme.border,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <Ionicons name="book-outline" size={26} color={theme.text} />
+              </View>
               <Text style={[styles.emptyTitle, { color: theme.text }]}>No parking sessions found</Text>
               <Text style={[styles.emptySub, { color: theme.textSecondary }]}>
                 {searchQuery
                   ? `No records matching "${searchQuery}".`
-                  : "Completed parking stays and municipal receipts will appear here."}
+                  : "Completed parking stays and municipal receipts will appear in your history logbook."}
               </Text>
             </View>
           }
@@ -938,9 +1084,9 @@ const Activities = () => {
                   {selectedInvoice.violationFine ? (
                     <View style={styles.invoiceRow}>
                       <Text style={[styles.invoiceLabel, { color: "#EF4444" }]}>
-                        ⚠️ Contravention Fine ({selectedInvoice.violationReason}):
+                        Contravention Fine ({selectedInvoice.violationReason}):
                       </Text>
-                      <Text style={[styles.invoiceValue, { color: "#EF4444", fontWeight: "900" }]}>
+                      <Text style={[styles.invoiceValue, { color: "#EF4444", fontWeight: "500" }]}>
                         +{selectedInvoice.violationFine.toLocaleString()} RWF
                       </Text>
                     </View>
@@ -958,7 +1104,7 @@ const Activities = () => {
 
                 {/* Fiscal Verified Badge */}
                 <View style={[styles.fiscalVerifiedBadge, { backgroundColor: theme.background, borderColor: theme.border }]}>
-                  <Ionicons name="shield-checkmark" size={16} color="#10B981" />
+                  <Ionicons name="shield-checkmark" size={16} color={theme.text} />
                   <Text style={[styles.fiscalVerifiedText, { color: theme.textSecondary }]}>
                     RRA Electronic Billing Machine (EBM) Verified • Authorized by City of Kigali
                   </Text>
@@ -1012,12 +1158,12 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   headerSubtitle: {
     fontSize: 11,
-    fontWeight: "500",
+    fontWeight: "400",
     marginTop: 2,
   },
   searchFilterWrapper: {
@@ -1036,7 +1182,7 @@ const styles = StyleSheet.create({
   searchInput: {
     flex: 1,
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "400",
     height: "100%",
   },
   filterPillsRow: {
@@ -1052,7 +1198,7 @@ const styles = StyleSheet.create({
   },
   filterPillText: {
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   centered: {
     flex: 1,
@@ -1077,7 +1223,7 @@ const styles = StyleSheet.create({
   },
   idleTitle: {
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "600",
     marginTop: 6,
     textAlign: "center",
   },
@@ -1105,7 +1251,7 @@ const styles = StyleSheet.create({
   },
   idlePrimaryBtnText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   idleSecondaryBtn: {
     flexDirection: "row",
@@ -1119,17 +1265,14 @@ const styles = StyleSheet.create({
   },
   idleSecondaryBtnText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   // Active Session Card
   activeSessionCard: {
-    backgroundColor: "#FFFFFF",
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: "#F1F5F9",
     padding: 20,
     marginBottom: 20,
-    shadowColor: "#000000",
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.05,
     shadowRadius: 14,
@@ -1143,14 +1286,12 @@ const styles = StyleSheet.create({
   },
   activeCardTitleText: {
     fontSize: 17,
-    fontWeight: "800",
-    color: "#0F172A",
+    fontWeight: "600",
   },
   liveIndicatorRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    backgroundColor: "rgba(34, 197, 94, 0.12)",
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 10,
@@ -1159,12 +1300,10 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "#000",
   },
   liveBadgeText: {
-    color: "#22C55E",
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.5,
   },
   activeDialWrapper: {
@@ -1185,30 +1324,25 @@ const styles = StyleSheet.create({
   },
   activeTimerDigitsBold: {
     fontSize: 36,
-    fontWeight: "900",
-    color: "#0F172A",
+    fontWeight: "700",
     letterSpacing: -0.5,
     fontVariant: ["tabular-nums"],
     marginTop: 12,
   },
   activeTimerSubLabel: {
     fontSize: 13,
-    fontWeight: "500",
-    color: "#94A3B8",
+    fontWeight: "400",
     marginTop: 4,
   },
   activeSlotInnerCard: {
-    backgroundColor: "#F8FAFC",
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: "#F1F5F9",
     padding: 14,
     marginBottom: 14,
   },
   activeSlotTitleText: {
     fontSize: 16,
-    fontWeight: "800",
-    color: "#0F172A",
+    fontWeight: "600",
     marginBottom: 12,
   },
   activeTimelineRow: {
@@ -1219,14 +1353,12 @@ const styles = StyleSheet.create({
   },
   activeTimelineLabel: {
     fontSize: 11,
-    fontWeight: "500",
-    color: "#94A3B8",
+    fontWeight: "400",
     marginBottom: 3,
   },
   activeTimelineTime: {
     fontSize: 13.5,
-    fontWeight: "800",
-    color: "#0F172A",
+    fontWeight: "600",
   },
   activeTimelineCenter: {
     flex: 1,
@@ -1237,12 +1369,9 @@ const styles = StyleSheet.create({
   activeTimelineLine: {
     flex: 1,
     height: 1,
-    backgroundColor: "#E2E8F0",
   },
   activeTimelinePill: {
     borderWidth: 1.5,
-    borderColor: "#000",
-    backgroundColor: "#FFFFFF",
     borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 3,
@@ -1250,8 +1379,7 @@ const styles = StyleSheet.create({
   },
   activeTimelinePillText: {
     fontSize: 10.5,
-    fontWeight: "700",
-    color: "#000",
+    fontWeight: "500",
   },
   activeViolationFineBanner: {
     flexDirection: "row",
@@ -1267,7 +1395,7 @@ const styles = StyleSheet.create({
   activeViolationFineTitle: {
     color: "#EF4444",
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   activeViolationFineSub: {
     color: "#F87171",
@@ -1288,7 +1416,7 @@ const styles = StyleSheet.create({
   },
   activeFindVehicleBtnText: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
     color: "#000",
   },
   activeActionsRow: {
@@ -1306,7 +1434,7 @@ const styles = StyleSheet.create({
   activeExtendBtnText: {
     color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   activeEndBtn: {
     flex: 1,
@@ -1319,7 +1447,7 @@ const styles = StyleSheet.create({
   activeEndBtnText: {
     color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   // Section Header
   sectionHeaderRow: {
@@ -1330,12 +1458,12 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   historyCountText: {
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   // History Item Card
   historyCard: {
@@ -1369,7 +1497,7 @@ const styles = StyleSheet.create({
   },
   historyLocationName: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
     flex: 1,
   },
   historyStatusPill: {
@@ -1379,7 +1507,7 @@ const styles = StyleSheet.create({
   },
   historyStatusPillText: {
     fontSize: 9,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   historyAddressText: {
     fontSize: 11,
@@ -1403,11 +1531,11 @@ const styles = StyleSheet.create({
   },
   historyBayBadgeText: {
     fontSize: 9,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   historyDateText: {
     fontSize: 10,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   historyFineBadge: {
     flexDirection: "row",
@@ -1423,31 +1551,33 @@ const styles = StyleSheet.create({
   historyFineBadgeText: {
     color: "#EF4444",
     fontSize: 9,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   historyCardRight: {
     alignItems: "flex-end",
   },
   historyCostText: {
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   receiptBtnText: {
     fontSize: 10,
-    fontWeight: "700",
+    fontWeight: "500",
     marginTop: 4,
   },
   emptyBox: {
-    borderRadius: 16,
+    borderRadius: 20,
     borderWidth: 1,
-    padding: 28,
+    padding: 36,
+    minHeight: Dimensions.get("window").height * 0.52,
     alignItems: "center",
     justifyContent: "center",
     marginVertical: 12,
   },
   emptyTitle: {
-    fontSize: 14,
-    fontWeight: "800",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: -0.2,
   },
   emptySub: {
     fontSize: 12,
@@ -1478,7 +1608,7 @@ const styles = StyleSheet.create({
   },
   invoiceHeaderBrand: {
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 0.8,
   },
   invoiceHeaderSub: {
@@ -1509,11 +1639,11 @@ const styles = StyleSheet.create({
   },
   invoiceLabel: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   invoiceValue: {
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   chargesSection: {
     gap: 8,
@@ -1525,12 +1655,12 @@ const styles = StyleSheet.create({
   },
   invoiceTotalLabel: {
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.5,
   },
   invoiceTotalValue: {
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   fiscalVerifiedBadge: {
     flexDirection: "row",
@@ -1543,7 +1673,7 @@ const styles = StyleSheet.create({
   },
   fiscalVerifiedText: {
     fontSize: 10,
-    fontWeight: "600",
+    fontWeight: "400",
     flex: 1,
     lineHeight: 14,
   },
@@ -1555,6 +1685,6 @@ const styles = StyleSheet.create({
   },
   invoiceDoneBtnText: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
 });

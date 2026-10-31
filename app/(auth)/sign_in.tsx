@@ -4,6 +4,7 @@ import {
   Alert,
   Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -16,7 +17,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { Icons } from "../../constants/icons";
-import { signIn } from "../services/auth";
+import {
+  resendSignupOtp,
+  signIn,
+  signInWithOAuthProvider,
+  verifyEmailSignupOtp,
+} from "../services/auth";
 import { GlassBackground } from "../../components/GlassBackground";
 import { useTheme } from "../../hooks/useTheme";
 
@@ -28,14 +34,22 @@ export default function SignIn() {
   const [rememberMe, setRememberMe] = useState(true);
   const [secureText, setSecureText] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
+  const [oauthLoading, setOauthLoading] = useState<"google" | "apple" | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [isIdFocused, setIsIdFocused] = useState(false);
   const [isPassFocused, setIsPassFocused] = useState(false);
 
+  // Email verification modal if account requires confirmation
+  const [verifyModalVisible, setVerifyModalVisible] = useState(false);
+  const [verifyCode, setVerifyCode] = useState("");
+  const [verifyLoading, setVerifyLoading] = useState(false);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
   const handleSignIn = async () => {
-    if (!identifier.trim() || !password) {
-      setErrorMessage("Please enter both email/phone and password.");
+    const cleanId = identifier.trim();
+    if (!cleanId || !password) {
+      setErrorMessage("Please enter both your email or phone number and password.");
       return;
     }
 
@@ -43,11 +57,23 @@ export default function SignIn() {
     setErrorMessage(null);
 
     try {
-      const { error } = await signIn(identifier, password);
+      const { data, error } = await signIn(cleanId, password);
       if (error) {
+        if (error.message.toLowerCase().includes("email not confirmed") && cleanId.includes("@")) {
+          setVerifyError(null);
+          setVerifyModalVisible(true);
+          resendSignupOtp(cleanId).catch(() => {});
+          return;
+        }
         setErrorMessage(error.message);
         return;
       }
+
+      if (!data?.session) {
+        setErrorMessage("Could not establish an authenticated session. Please try again.");
+        return;
+      }
+
       router.replace("/(tabs)/home");
     } catch (err: unknown) {
       const message =
@@ -58,8 +84,38 @@ export default function SignIn() {
     }
   };
 
-  const handleDemoSignIn = () => {
-    router.replace("/(tabs)/home");
+  const handleOAuthLogin = async (provider: "google" | "apple") => {
+    setOauthLoading(provider);
+    setErrorMessage(null);
+    try {
+      await signInWithOAuthProvider(provider);
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : `Could not sign in with ${provider === "google" ? "Google" : "Apple"}.`;
+      setErrorMessage(message);
+    } finally {
+      setOauthLoading(null);
+    }
+  };
+
+  const handleVerifyEmailCode = async () => {
+    if (verifyCode.trim().length < 6) {
+      setVerifyError("Please enter the 6-digit verification code sent to your email.");
+      return;
+    }
+    setVerifyLoading(true);
+    setVerifyError(null);
+    try {
+      await verifyEmailSignupOtp(identifier.trim(), verifyCode.trim());
+      setVerifyModalVisible(false);
+      router.replace("/(tabs)/home");
+    } catch (e: any) {
+      setVerifyError(e?.message || "Invalid or expired verification code.");
+    } finally {
+      setVerifyLoading(false);
+    }
   };
 
   return (
@@ -74,19 +130,19 @@ export default function SignIn() {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Header Content matching reference */}
+            {/* Header Content */}
             <View style={styles.headerSection}>
               <Text style={[styles.mainHeading, { color: theme.text }]}>
                 Welcome Back!
               </Text>
               <Text style={[styles.subHeading, { color: theme.textSecondary }]}>
-                Bring smart parking with you across Kigali.{" "}
+                Sign in to access live parking availability and EV charging.{" "}
                 <Text
                   style={[styles.faqLink, { color: theme.text }]}
                   onPress={() =>
                     Alert.alert(
-                      "ParkZone FAQ",
-                      "ParkZone operates official City of Kigali municipal parking zones and fast EV charging hubs."
+                      "ParkZone Account",
+                      "Sign in with your registered email address or phone number to manage your vehicles, parking sessions, and EV charging."
                     )
                   }
                 >
@@ -138,6 +194,7 @@ export default function SignIn() {
                 placeholder="Email Address or Phone"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
+                autoCorrect={false}
                 keyboardType="email-address"
                 value={identifier}
                 onFocus={() => setIsIdFocused(true)}
@@ -231,7 +288,7 @@ export default function SignIn() {
                   )}
                 </View>
                 <Text style={[styles.rememberLabel, { color: theme.textSecondary }]}>
-                  Remember me
+                  Keep me signed in
                 </Text>
               </TouchableOpacity>
 
@@ -255,7 +312,7 @@ export default function SignIn() {
                 },
               ]}
               onPress={handleSignIn}
-              disabled={isLoading}
+              disabled={isLoading || oauthLoading !== null}
               activeOpacity={0.88}
             >
               {isLoading ? (
@@ -274,7 +331,7 @@ export default function SignIn() {
               <View style={[styles.orDividerLine, { backgroundColor: theme.border }]} />
             </View>
 
-            {/* Social Logins matching reference screenshot */}
+            {/* OAuth Logins */}
             <TouchableOpacity
               style={[
                 styles.socialPillBtn,
@@ -283,15 +340,22 @@ export default function SignIn() {
                   borderColor: theme.border,
                 },
               ]}
-              onPress={handleDemoSignIn}
+              onPress={() => handleOAuthLogin("google")}
+              disabled={isLoading || oauthLoading !== null}
               activeOpacity={0.8}
             >
-              <Image
-                source={Icons.googleIcon}
-                style={{ width: 19, height: 19, marginRight: 10 }}
-                resizeMode="contain"
-              />
-              <Text style={[styles.socialPillText, { color: theme.text }]}>Login with Google</Text>
+              {oauthLoading === "google" ? (
+                <ActivityIndicator size="small" color={theme.text} />
+              ) : (
+                <>
+                  <Image
+                    source={Icons.googleIcon}
+                    style={{ width: 19, height: 19, marginRight: 10 }}
+                    resizeMode="contain"
+                  />
+                  <Text style={[styles.socialPillText, { color: theme.text }]}>Login with Google</Text>
+                </>
+              )}
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -303,11 +367,18 @@ export default function SignIn() {
                   marginTop: 12,
                 },
               ]}
-              onPress={handleDemoSignIn}
+              onPress={() => handleOAuthLogin("apple")}
+              disabled={isLoading || oauthLoading !== null}
               activeOpacity={0.8}
             >
-              <Ionicons name="logo-apple" size={20} color={theme.text} style={{ marginRight: 10 }} />
-              <Text style={[styles.socialPillText, { color: theme.text }]}>Login with Apple</Text>
+              {oauthLoading === "apple" ? (
+                <ActivityIndicator size="small" color={theme.text} />
+              ) : (
+                <>
+                  <Ionicons name="logo-apple" size={20} color={theme.text} style={{ marginRight: 10 }} />
+                  <Text style={[styles.socialPillText, { color: theme.text }]}>Login with Apple</Text>
+                </>
+              )}
             </TouchableOpacity>
 
             {/* Footer Row: Don't have an account? Sign Up */}
@@ -322,19 +393,99 @@ export default function SignIn() {
                 </Text>
               </Text>
             </View>
-
-            {/* Quick Demo Bypass */}
-            <TouchableOpacity
-              style={styles.demoLink}
-              onPress={handleDemoSignIn}
-              activeOpacity={0.7}
-            >
-              <Text style={[styles.demoLinkText, { color: theme.textMuted }]}>
-                Explore as Guest Motorist ›
-              </Text>
-            </TouchableOpacity>
           </ScrollView>
         </KeyboardAvoidingView>
+
+        {/* Unconfirmed Email OTP Modal */}
+        <Modal
+          visible={verifyModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setVerifyModalVisible(false)}
+        >
+          <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.65)", justifyContent: "center", padding: 24 }}>
+            <View
+              style={{
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
+                borderWidth: 1,
+                borderRadius: 24,
+                padding: 22,
+              }}
+            >
+              <Text style={{ fontSize: 19, fontWeight: "600", color: theme.text, marginBottom: 6 }}>
+                Confirm Your Email
+              </Text>
+              <Text style={{ fontSize: 13, color: theme.textSecondary, lineHeight: 19, marginBottom: 16 }}>
+                Enter the 6-digit verification code sent to {identifier.trim().toLowerCase()} to activate your session.
+              </Text>
+
+              {verifyError ? (
+                <Text style={{ color: "#EF4444", fontSize: 12, fontWeight: "500", marginBottom: 10 }}>
+                  {verifyError}
+                </Text>
+              ) : null}
+
+              <TextInput
+                style={{
+                  height: 52,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: theme.border,
+                  backgroundColor: theme.background,
+                  color: theme.text,
+                  fontSize: 20,
+                  fontWeight: "600",
+                  letterSpacing: 6,
+                  textAlign: "center",
+                  marginBottom: 16,
+                }}
+                value={verifyCode}
+                onChangeText={(t) => {
+                  setVerifyCode(t.replace(/\D/g, "").slice(0, 6));
+                  setVerifyError(null);
+                }}
+                placeholder="000000"
+                placeholderTextColor={theme.textMuted}
+                keyboardType="number-pad"
+                maxLength={6}
+              />
+
+              <TouchableOpacity
+                style={[styles.primaryBtn, { backgroundColor: theme.primaryBtnBg, height: 50 }]}
+                onPress={handleVerifyEmailCode}
+                disabled={verifyLoading}
+              >
+                {verifyLoading ? (
+                  <ActivityIndicator color={theme.primaryBtnText} />
+                ) : (
+                  <Text style={[styles.primaryBtnText, { color: theme.primaryBtnText }]}>
+                    VERIFY & SIGN IN
+                  </Text>
+                )}
+              </TouchableOpacity>
+
+              <View style={{ flexDirection: "row", justifyContent: "space-between", marginTop: 14 }}>
+                <TouchableOpacity
+                  onPress={async () => {
+                    try {
+                      await resendSignupOtp(identifier.trim());
+                      Alert.alert("Code Sent", "A fresh 6-digit verification code has been emailed.");
+                    } catch (e: any) {
+                      setVerifyError(e?.message || "Could not resend code.");
+                    }
+                  }}
+                >
+                  <Text style={{ fontSize: 12.5, fontWeight: "500", color: theme.text }}>Resend Code</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity onPress={() => setVerifyModalVisible(false)}>
+                  <Text style={{ fontSize: 12.5, fontWeight: "500", color: theme.textSecondary }}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </GlassBackground>
   );
@@ -355,7 +506,7 @@ const styles = StyleSheet.create({
   },
   mainHeading: {
     fontSize: 32,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.6,
     marginBottom: 8,
   },
@@ -365,7 +516,7 @@ const styles = StyleSheet.create({
     fontWeight: "400",
   },
   faqLink: {
-    fontWeight: "700",
+    fontWeight: "500",
     textDecorationLine: "underline",
   },
   errorBanner: {
@@ -379,7 +530,7 @@ const styles = StyleSheet.create({
   errorBannerText: {
     color: "#EF4444",
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
     flex: 1,
   },
   inputPill: {
@@ -396,7 +547,7 @@ const styles = StyleSheet.create({
   textInput: {
     flex: 1,
     fontSize: 14.5,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   eyeToggleBtn: {
     padding: 4,
@@ -424,11 +575,11 @@ const styles = StyleSheet.create({
   },
   rememberLabel: {
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   forgotPasswordLabel: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   primaryBtn: {
     height: 56,
@@ -442,7 +593,7 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 1,
   },
   orDividerRow: {
@@ -458,7 +609,7 @@ const styles = StyleSheet.create({
   orDividerText: {
     paddingHorizontal: 14,
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   socialPillBtn: {
     height: 54,
@@ -470,7 +621,7 @@ const styles = StyleSheet.create({
   },
   socialPillText: {
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   footerRow: {
     marginTop: 32,
@@ -478,10 +629,10 @@ const styles = StyleSheet.create({
   },
   footerText: {
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   footerLinkBold: {
-    fontWeight: "800",
+    fontWeight: "600",
     textDecorationLine: "underline",
   },
   demoLink: {
@@ -490,6 +641,6 @@ const styles = StyleSheet.create({
   },
   demoLinkText: {
     fontSize: 12,
-    fontWeight: "600",
+    fontWeight: "400",
   },
 });

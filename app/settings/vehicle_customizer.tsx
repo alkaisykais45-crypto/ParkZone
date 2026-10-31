@@ -1,8 +1,7 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Alert,
   Dimensions,
-  Platform,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -24,6 +23,8 @@ import {
   DriverVehicleSpecs,
   useDriverVehicle,
 } from "../../hooks/useDriverVehicle";
+import { supabase } from "../lib/supabase";
+import { RegisteredVehicle, fetchUserVehicles } from "../services/parking";
 
 const { width } = Dimensions.get("window");
 
@@ -41,73 +42,114 @@ const COLOR_SWATCHES: { id: CarColorVariant; name: string; hex: string }[] = [
   { id: "champagne", name: "Champagne Gold", hex: "#B45309" },
 ];
 
-const PRESET_MODELS = [
-  { name: "Porsche Taycan 4S", type: "ev", plug: "CCS2 Combo", battery: 93.4 },
-  { name: "Tesla Model 3", type: "ev", plug: "CCS2 Combo", battery: 75.0 },
-  { name: "Hyundai Ioniq 5", type: "ev", plug: "CCS2 Combo", battery: 77.4 },
-  { name: "Toyota RAV4 Hybrid", type: "hybrid", plug: "Type 2 Mennekes", battery: 18.1 },
-  { name: "Volkswagen ID.4", type: "ev", plug: "CCS2 Combo", battery: 82.0 },
-  { name: "BMW i4 M50", type: "ev", plug: "CCS2 Combo", battery: 83.9 },
-  { name: "Volkswagen Golf R", type: "gasoline", plug: "None", battery: 0 },
-];
-
 export default function VehicleCustomizer() {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
   const { vehicle, updateVehicle } = useDriverVehicle();
 
-  // Local editable form state
+  // Local editable form state synced from Supabase vehicle
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string>(vehicle.id);
   const [selectedColor, setSelectedColor] = useState<CarColorVariant>(vehicle.colorVariant);
   const [plateNumber, setPlateNumber] = useState(vehicle.plateNumber);
   const [makeModel, setMakeModel] = useState(vehicle.makeModel);
   const [vehicleType, setVehicleType] = useState<DriverVehicleSpecs["vehicleType"]>(vehicle.vehicleType);
   const [bodyStyle, setBodyStyle] = useState<DriverVehicleSpecs["bodyStyle"]>(vehicle.bodyStyle);
   const [plugType, setPlugType] = useState<DriverVehicleSpecs["plugType"]>(vehicle.plugType);
-  const [batteryCapacity, setBatteryCapacity] = useState(String(vehicle.batteryCapacityKwh));
+  const [batteryCapacity, setBatteryCapacity] = useState(
+    vehicle.batteryCapacityKwh > 0 ? String(vehicle.batteryCapacityKwh) : ""
+  );
   const [batteryLevel, setBatteryLevel] = useState(vehicle.batteryLevelPercent);
   const [driveMode, setDriveMode] = useState<DriverVehicleSpecs["driveMode"]>(vehicle.driveMode);
   const [permitType, setPermitType] = useState<DriverVehicleSpecs["parkingPermitType"]>(vehicle.parkingPermitType);
   const [orientation, setOrientation] = useState<"horizontal" | "vertical">("horizontal");
   const [headlightsOn, setHeadlightsOn] = useState(vehicle.headlightsActive);
+  const [registeredFleet, setRegisteredFleet] = useState<RegisteredVehicle[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
-  const onRefresh = async () => {
-    setRefreshing(true);
+  const loadRegisteredFleet = useCallback(async () => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user?.id) {
+        const list = await fetchUserVehicles(user.id);
+        setRegisteredFleet(list);
+      } else {
+        setRegisteredFleet([]);
+      }
+    } catch {
+      setRegisteredFleet([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadRegisteredFleet();
+  }, [loadRegisteredFleet]);
+
+  useEffect(() => {
     if (vehicle) {
+      setSelectedVehicleId(vehicle.id);
       setSelectedColor(vehicle.colorVariant);
       setPlateNumber(vehicle.plateNumber);
       setMakeModel(vehicle.makeModel);
       setVehicleType(vehicle.vehicleType);
       setBodyStyle(vehicle.bodyStyle);
       setPlugType(vehicle.plugType);
-      setBatteryCapacity(String(vehicle.batteryCapacityKwh));
+      setBatteryCapacity(vehicle.batteryCapacityKwh > 0 ? String(vehicle.batteryCapacityKwh) : "");
       setBatteryLevel(vehicle.batteryLevelPercent);
       setDriveMode(vehicle.driveMode);
       setPermitType(vehicle.parkingPermitType);
       setHeadlightsOn(vehicle.headlightsActive);
     }
-    await new Promise((r) => setTimeout(r, 400));
+  }, [vehicle]);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await loadRegisteredFleet();
     setRefreshing(false);
   };
 
-  const handleApplyPreset = (preset: typeof PRESET_MODELS[0]) => {
-    setMakeModel(preset.name);
-    setVehicleType(preset.type as any);
-    setPlugType(preset.plug as any);
-    setBatteryCapacity(String(preset.battery));
+  const handleSelectRegisteredVehicle = (v: RegisteredVehicle) => {
+    setSelectedVehicleId(v.id);
+    const raw = v as any;
+    setPlateNumber(v.plate_number || "");
+    setMakeModel(v.make_model || "");
+    setVehicleType(v.vehicle_type === "ev" ? "ev" : "gasoline");
+    if (raw.body_style) {
+      setBodyStyle(raw.body_style);
+    }
+    if (raw.plug_type) {
+      setPlugType(raw.plug_type);
+    } else {
+      setPlugType(v.vehicle_type === "ev" ? "CCS2 Combo" : "None");
+    }
+    if (raw.battery_capacity_kwh) {
+      setBatteryCapacity(String(raw.battery_capacity_kwh));
+    } else {
+      setBatteryCapacity("");
+    }
+    if (raw.battery_level_percent !== undefined && raw.battery_level_percent !== null) {
+      setBatteryLevel(Number(raw.battery_level_percent));
+    }
+    const matchedSwatch = COLOR_SWATCHES.find(
+      (s) => s.id === v.color?.toLowerCase() || s.name.toLowerCase() === v.color?.toLowerCase()
+    );
+    if (matchedSwatch) {
+      setSelectedColor(matchedSwatch.id);
+    }
   };
 
   const handleSave = async () => {
     if (!plateNumber.trim()) {
-      Alert.alert("Missing Plate", "Please enter a valid license plate number (e.g. RAD 123 A).");
+      Alert.alert("Missing Plate", "Please enter a valid license plate number.");
       return;
     }
 
     setIsSaving(true);
     try {
       const activeColorObj = COLOR_SWATCHES.find((s) => s.id === selectedColor);
+      const parsedCap = parseFloat(batteryCapacity) || (vehicleType === "ev" ? 75 : 0);
       await updateVehicle({
+        id: selectedVehicleId || undefined,
         plateNumber: plateNumber.trim().toUpperCase(),
         makeModel: makeModel.trim(),
         vehicleType,
@@ -115,17 +157,19 @@ export default function VehicleCustomizer() {
         colorName: activeColorObj ? activeColorObj.name : "Custom Finish",
         bodyStyle,
         plugType,
-        batteryCapacityKwh: parseFloat(batteryCapacity) || 75,
+        batteryCapacityKwh: parsedCap,
         batteryLevelPercent: batteryLevel,
-        estimatedRangeKm: vehicleType === "ev" ? Math.round((batteryLevel / 100) * 480) : 620,
+        estimatedRangeKm: vehicleType === "ev" ? Math.round((batteryLevel / 100) * parsedCap * 5.2) : 0,
         parkingPermitType: permitType,
         driveMode,
         headlightsActive: headlightsOn,
       });
 
+      await loadRegisteredFleet();
+
       Alert.alert(
         "Vehicle Profile Updated",
-        `Your ${makeModel} (${plateNumber.toUpperCase()}) specifications are live across all Kigali parking lots and telemetry sensors in real time.`,
+        `Your ${makeModel || "vehicle"} (${plateNumber.toUpperCase()}) specifications have been saved to the database.`,
         [{ text: "Done", onPress: () => router.back() }]
       );
     } catch (e: any) {
@@ -182,7 +226,7 @@ export default function VehicleCustomizer() {
           {/* Top Stage Indicators */}
           <View style={styles.stageTopRow}>
             <View style={[styles.liveSyncBadge, { backgroundColor: theme.background, borderColor: theme.border }]}>
-              <View style={styles.livePulseDot} />
+              <View style={[styles.livePulseDot, { backgroundColor: theme.accent }]} />
               <Text style={[styles.liveSyncText, { color: theme.text }]}>LIVE TELEMETRY</Text>
             </View>
 
@@ -258,10 +302,10 @@ export default function VehicleCustomizer() {
           <View style={[styles.stageHudFooter, { borderTopColor: theme.border }]}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.hudPlateText, { color: theme.text }]}>
-                {plateNumber.toUpperCase() || "RAD 123 A"}
+                {plateNumber.trim() ? plateNumber.toUpperCase() : "UNREGISTERED PLATE"}
               </Text>
               <Text style={[styles.hudModelText, { color: theme.textSecondary }]}>
-                {makeModel} • {bodyStyle}
+                {makeModel.trim() || "Vehicle Not Configured"} • {bodyStyle}
               </Text>
             </View>
 
@@ -272,7 +316,7 @@ export default function VehicleCustomizer() {
                 color={theme.text}
               />
               <Text style={[styles.hudBatteryText, { color: theme.text }]}>
-                {vehicleType === "ev" ? `${batteryLevel}%` : "92% Fuel"}
+                {vehicleType === "ev" ? `${batteryLevel}%` : bodyStyle}
               </Text>
             </View>
           </View>
@@ -332,7 +376,7 @@ export default function VehicleCustomizer() {
                     styles.swatchLabel,
                     {
                       color: isSelected ? theme.text : theme.textSecondary,
-                      fontWeight: isSelected ? "800" : "500",
+                      fontWeight: isSelected ? "600" : "400",
                     },
                   ]}
                   numberOfLines={1}
@@ -345,12 +389,12 @@ export default function VehicleCustomizer() {
         </ScrollView>
 
         {/* =========================================================================
-            SECTION 3: QUICK PRESET VEHICLES
+            SECTION 3: REGISTERED VEHICLES IN DATABASE
         ========================================================================== */}
         <View style={styles.sectionHeader}>
-          <Text style={[styles.sectionTitle, { color: theme.text }]}>Vehicle Presets in Rwanda</Text>
+          <Text style={[styles.sectionTitle, { color: theme.text }]}>Your Registered Vehicles</Text>
           <Text style={[styles.sectionSubtitle, { color: theme.textSecondary }]}>
-            Auto-fill Kigali homologated specs
+            Select a registered plate from your database fleet or add a new vehicle
           </Text>
         </View>
 
@@ -359,11 +403,11 @@ export default function VehicleCustomizer() {
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.presetsScroll}
         >
-          {PRESET_MODELS.map((p) => {
-            const isCurrent = makeModel === p.name;
+          {registeredFleet.map((v) => {
+            const isCurrent = plateNumber.trim().toUpperCase() === v.plate_number?.toUpperCase();
             return (
               <TouchableOpacity
-                key={p.name}
+                key={v.id}
                 style={[
                   styles.presetChip,
                   {
@@ -371,7 +415,7 @@ export default function VehicleCustomizer() {
                     borderColor: isCurrent ? theme.pillActiveBg : theme.border,
                   },
                 ]}
-                onPress={() => handleApplyPreset(p)}
+                onPress={() => handleSelectRegisteredVehicle(v)}
                 activeOpacity={0.8}
               >
                 <Text
@@ -380,7 +424,7 @@ export default function VehicleCustomizer() {
                     { color: isCurrent ? theme.pillActiveText : theme.text },
                   ]}
                 >
-                  {p.name}
+                  {v.plate_number}
                 </Text>
                 <Text
                   style={[
@@ -388,11 +432,31 @@ export default function VehicleCustomizer() {
                     { color: isCurrent ? theme.pillActiveText : theme.textSecondary },
                   ]}
                 >
-                  {p.type.toUpperCase()} • {p.battery > 0 ? `${p.battery} kWh` : "Combustion"}
+                  {v.make_model || "Vehicle"} • {v.vehicle_type.toUpperCase()}
                 </Text>
               </TouchableOpacity>
             );
           })}
+
+          <TouchableOpacity
+            style={[
+              styles.presetChip,
+              {
+                backgroundColor: theme.surface,
+                borderColor: theme.border,
+                justifyContent: "center",
+              },
+            ]}
+            onPress={() => router.push("/(tabs)/vehicles")}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.presetChipText, { color: theme.text }]}>
+              + Register Vehicle
+            </Text>
+            <Text style={[styles.presetChipSub, { color: theme.textSecondary }]}>
+              {registeredFleet.length === 0 ? "No vehicles saved yet" : "Manage fleet"}
+            </Text>
+          </TouchableOpacity>
         </ScrollView>
 
         {/* =========================================================================
@@ -411,14 +475,14 @@ export default function VehicleCustomizer() {
             <Text style={[styles.fieldLabel, { color: theme.textSecondary }]}>License Plate Number</Text>
             <View style={[styles.plateInputBox, { backgroundColor: theme.background, borderColor: theme.border }]}>
               <View style={styles.rwandaFlagPill}>
-                <Text style={styles.flagText}>🇷🇼</Text>
+                <Text style={styles.flagText}>RW</Text>
                 <Text style={styles.flagSub}>RW</Text>
               </View>
               <TextInput
                 style={[styles.plateTextInput, { color: theme.text }]}
                 value={plateNumber}
                 onChangeText={setPlateNumber}
-                placeholder="RAD 123 A"
+                placeholder="Enter license plate"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="characters"
               />
@@ -432,7 +496,7 @@ export default function VehicleCustomizer() {
               style={[styles.standardInput, { backgroundColor: theme.background, borderColor: theme.border, color: theme.text }]}
               value={makeModel}
               onChangeText={setMakeModel}
-              placeholder="e.g. Porsche Taycan 4S"
+              placeholder="Enter make and model"
               placeholderTextColor={theme.textMuted}
             />
           </View>
@@ -471,7 +535,7 @@ export default function VehicleCustomizer() {
                         styles.segmentText,
                         {
                           color: isActive ? theme.pillActiveText : theme.text,
-                          fontWeight: isActive ? "800" : "500",
+                          fontWeight: isActive ? "600" : "400",
                         },
                       ]}
                     >
@@ -507,7 +571,7 @@ export default function VehicleCustomizer() {
                         styles.segmentText,
                         {
                           color: isActive ? theme.pillActiveText : theme.text,
-                          fontWeight: isActive ? "800" : "500",
+                          fontWeight: isActive ? "600" : "400",
                         },
                       ]}
                     >
@@ -549,7 +613,7 @@ export default function VehicleCustomizer() {
                           styles.segmentText,
                           {
                             color: isActive ? theme.pillActiveText : theme.text,
-                            fontWeight: isActive ? "800" : "500",
+                            fontWeight: isActive ? "600" : "400",
                           },
                         ]}
                       >
@@ -605,7 +669,7 @@ export default function VehicleCustomizer() {
                         styles.segmentText,
                         {
                           color: isActive ? theme.pillActiveText : theme.text,
-                          fontWeight: isActive ? "800" : "500",
+                          fontWeight: isActive ? "600" : "400",
                         },
                       ]}
                     >
@@ -641,7 +705,7 @@ export default function VehicleCustomizer() {
                         styles.segmentText,
                         {
                           color: isActive ? theme.pillActiveText : theme.text,
-                          fontWeight: isActive ? "800" : "500",
+                          fontWeight: isActive ? "600" : "400",
                         },
                       ]}
                     >
@@ -698,12 +762,12 @@ const styles = StyleSheet.create({
   },
   headerTitle: {
     fontSize: 17,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   headerSubtitle: {
     fontSize: 11,
-    fontWeight: "500",
+    fontWeight: "400",
     marginTop: 2,
   },
   headerActionBtn: {
@@ -715,7 +779,7 @@ const styles = StyleSheet.create({
   },
   headerActionBtnText: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   scrollContent: {
     paddingHorizontal: 18,
@@ -752,11 +816,10 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "#22C55E",
   },
   liveSyncText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
     letterSpacing: 0.5,
   },
   stageControlsRow: {
@@ -823,12 +886,12 @@ const styles = StyleSheet.create({
   },
   hudPlateText: {
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 1,
   },
   hudModelText: {
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "400",
     marginTop: 2,
   },
   hudBatteryBadge: {
@@ -842,7 +905,7 @@ const styles = StyleSheet.create({
   },
   hudBatteryText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 
   /* Sections */
@@ -851,12 +914,12 @@ const styles = StyleSheet.create({
   },
   sectionTitle: {
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   sectionSubtitle: {
     fontSize: 11,
-    fontWeight: "500",
+    fontWeight: "400",
     marginTop: 2,
   },
   swatchesScroll: {
@@ -894,11 +957,11 @@ const styles = StyleSheet.create({
   },
   presetChipText: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   presetChipSub: {
     fontSize: 10,
-    fontWeight: "600",
+    fontWeight: "400",
   },
 
   /* Form */
@@ -914,7 +977,7 @@ const styles = StyleSheet.create({
   },
   fieldLabel: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   plateInputBox: {
     flexDirection: "row",
@@ -939,12 +1002,12 @@ const styles = StyleSheet.create({
   },
   flagSub: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "400",
   },
   plateTextInput: {
     flex: 1,
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "400",
     letterSpacing: 1,
   },
   standardInput: {
@@ -953,7 +1016,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     paddingHorizontal: 14,
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   segmentRow: {
     flexDirection: "row",
@@ -987,6 +1050,6 @@ const styles = StyleSheet.create({
   },
   saveActionBtnText: {
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "600",
   },
 });

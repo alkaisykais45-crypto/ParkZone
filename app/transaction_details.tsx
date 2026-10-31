@@ -1,10 +1,11 @@
-import React, { useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Dimensions,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -15,80 +16,108 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "../hooks/useTheme";
-import { PARKING_HISTORY_STORAGE_KEY } from "./recent_parkings";
+import { supabase } from "./lib/supabase";
+import {
+  completeParkingSession,
+  fetchActiveParkingTicket,
+  fetchUserPaymentMethods,
+  fetchWalletBalance,
+  updateWalletBalance,
+} from "./services/parking";
+import { initiateMobilePayment } from "./services/mobilePayment";
 
 const { width } = Dimensions.get("window");
 
 interface PaymentMethodOption {
   id: string;
+  methodType: "momo" | "airtel" | "card" | "wallet";
   name: string;
   subtitle: string;
   icon: keyof typeof Ionicons.glyphMap;
   isDefault?: boolean;
 }
 
-const PAYMENT_METHODS: PaymentMethodOption[] = [
-  {
-    id: "balance",
-    name: "ParkZone Balance",
-    subtitle: "Balance • 42,190 RWF",
-    icon: "cash-outline",
-    isDefault: true,
-  },
-  {
-    id: "momo",
-    name: "MTN Mobile Money",
-    subtitle: "078 ••• •812 • Instant Pay",
-    icon: "phone-portrait-outline",
-  },
-  {
-    id: "airtel",
-    name: "Airtel Money",
-    subtitle: "073 ••• •441 • Instant Pay",
-    icon: "flash-outline",
-  },
-  {
-    id: "card",
-    name: "Debit / Credit Card",
-    subtitle: "Visa ending in •••• 4242",
-    icon: "card-outline",
-  },
-];
+interface LiveTransactionState {
+  id: string;
+  sourceTable: "parking_tickets" | "ev_charging_sessions" | "parking_fines" | "local";
+  spaceId?: string;
+  name: string;
+  address: string;
+  bayNumber: string;
+  zoneCode: string;
+  plate: string;
+  date: string;
+  duration: string;
+  durationHours: number;
+  cost: number;
+  currency: string;
+  receiptNumber: string;
+  entryTime: string;
+  exitTime?: string;
+  status: "active" | "completed" | "overdue" | "cancelled";
+  paymentStatus: "paid" | "unpaid" | "pending";
+  violationFine: number;
+  violationReason: string;
+  isOverdue: boolean;
+  isPostpaidEv: boolean;
+  isEv: boolean;
+}
 
 export default function TransactionDetailsScreen() {
   const theme = useTheme();
   const params = useLocalSearchParams();
 
-  // Route parameters or sensible fallbacks matching screenshot
-  const sessionData = useMemo(() => {
-    const rawCost = params.cost ? Number(params.cost) : 400;
+  // Initial fallback parsed from route parameters
+  const initialData: LiveTransactionState = useMemo(() => {
+    const rawCost = params.cost ? Number(params.cost) : 0;
     const rawFine = params.violationFine ? Number(params.violationFine) : 0;
     const rawHours = params.durationHours ? Number(params.durationHours) : 1;
+    const isOverdueParam = params.isOverdue === "true";
+    const isPostpaidEvParam = params.isPostpaidEv === "true";
+
+    const bay = (params.bayNumber as string) || "-";
+    const nameStr = (params.name as string) || "Parking Facility";
+    const zone = (params.zoneCode as string) || "";
+    const isEvBay =
+      bay.toLowerCase().includes("ev") ||
+      nameStr.toLowerCase().includes("ev") ||
+      zone.toLowerCase().includes("ev") ||
+      isPostpaidEvParam;
 
     return {
-      id: (params.id as string) || "session-active",
-      name: (params.name as string) || "Toserba Yogya Car Parking",
-      address: (params.address as string) || "2nd Floor / A Sector",
-      bayNumber: (params.bayNumber as string) || "A-09",
-      zoneCode: (params.zoneCode as string) || "Sector A",
-      plate: (params.plate as string) || "RAD 812 B",
-      date: (params.date as string) || "28 July 2023",
-      duration: (params.duration as string) || "1 Hours",
-      durationHours: rawHours,
-      cost: isNaN(rawCost) ? 400 : rawCost,
+      id: (params.id as string) || "",
+      sourceTable: "local",
+      spaceId: (params.spaceId as string) || undefined,
+      name: nameStr,
+      address: (params.address as string) || "",
+      bayNumber: bay,
+      zoneCode: zone,
+      plate: (params.plate as string) || "",
+      date: (params.date as string) || new Date().toLocaleDateString(),
+      duration: (params.duration as string) || "1 Hour",
+      durationHours: isNaN(rawHours) ? 1 : rawHours,
+      cost: isNaN(rawCost) ? 0 : rawCost,
       currency: (params.currency as string) || "RWF",
-      receiptNumber: (params.receiptNumber as string) || "309",
+      receiptNumber: (params.receiptNumber as string) || "-",
       entryTime: (params.entryTime as string) || new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+      exitTime: undefined,
+      status: isOverdueParam ? "overdue" : "completed",
+      paymentStatus: isOverdueParam || isPostpaidEvParam ? "unpaid" : "paid",
       violationFine: isNaN(rawFine) ? 0 : rawFine,
       violationReason: (params.violationReason as string) || "",
+      isOverdue: isOverdueParam,
+      isPostpaidEv: isPostpaidEvParam,
+      isEv: isEvBay,
     };
   }, [params]);
 
-  // Payment method selection
-  const [selectedMethod, setSelectedMethod] = useState<PaymentMethodOption>(PAYMENT_METHODS[0]);
-  const [methodPickerVisible, setMethodPickerVisible] = useState(false);
+  const [transaction, setTransaction] = useState<LiveTransactionState>(initialData);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+
+  // Live Wallet Balance
+  const [walletBalance, setWalletBalance] = useState<number>(0);
 
   // Voucher state
   const [voucherModalVisible, setVoucherModalVisible] = useState(false);
@@ -99,36 +128,319 @@ export default function TransactionDetailsScreen() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState(false);
 
-  // Computations
-  const isEvSession = useMemo(() => {
-    return (
-      sessionData.bayNumber.toLowerCase().includes("ev") ||
-      sessionData.name.toLowerCase().includes("ev") ||
-      sessionData.zoneCode.toLowerCase().includes("ev") ||
-      Boolean(sessionData.violationReason?.toLowerCase().includes("ev"))
-    );
-  }, [sessionData]);
+  // Real-time Database Loader
+  const loadRealtimeTransaction = useCallback(
+    async (targetId?: string) => {
+      const searchId = targetId || transaction.id || (params.id as string);
+      let foundRecord: LiveTransactionState | null = null;
 
-  const isOverdue = params.isOverdue === "true";
-  const subtotal = sessionData.cost;
-  const fine = sessionData.violationFine || 0;
+      try {
+        if (searchId) {
+          // 1. Query parking_tickets
+          const { data: ticket } = await supabase
+            .from("parking_tickets")
+            .select(`
+              *,
+              parking_locations:location_id (*),
+              parking_spaces:space_id (*)
+            `)
+            .or(`id.eq.${searchId},ticket_number.eq.${searchId}`)
+            .maybeSingle();
+
+          if (ticket) {
+            const loc = Array.isArray(ticket.parking_locations)
+              ? ticket.parking_locations[0]
+              : ticket.parking_locations;
+            const sp = Array.isArray(ticket.parking_spaces)
+              ? ticket.parking_spaces[0]
+              : ticket.parking_spaces;
+            const entryDate = new Date(ticket.entry_time);
+            const exitDate = ticket.exit_time ? new Date(ticket.exit_time) : new Date();
+            const diffMins = Math.max(1, Math.round((exitDate.getTime() - entryDate.getTime()) / 60000));
+            const bookedHours = ticket.hours_elapsed || 1;
+            const elapsedHours = diffMins / 60;
+            const isOverdue = ticket.status === "overdue" || elapsedHours > bookedHours;
+
+            foundRecord = {
+              id: ticket.id,
+              sourceTable: "parking_tickets",
+              spaceId: ticket.space_id,
+              name: loc?.name || "Parking Facility",
+              address: loc?.address || `${sp?.zone_code || "Zone A"} • Level 1`,
+              bayNumber: sp?.space_number || "-",
+              zoneCode: sp?.zone_code || loc?.zone_code || "Zone A",
+              plate: ticket.vehicle_plate || "",
+              date: entryDate.toLocaleDateString(),
+              duration: `${Math.floor(diffMins / 60)}h ${diffMins % 60}m`,
+              durationHours: Math.max(1, Math.ceil(diffMins / 60)),
+              cost: Number(ticket.total_amount) || 0,
+              currency: "RWF",
+              receiptNumber: ticket.ticket_number || ticket.id.slice(0, 8),
+              entryTime: ticket.entry_time,
+              exitTime: ticket.exit_time,
+              status: ticket.status || "active",
+              paymentStatus: ticket.payment_status || "paid",
+              violationFine: 0,
+              violationReason: isOverdue ? "Overtime overstay" : "",
+              isOverdue,
+              isPostpaidEv: false,
+              isEv: false,
+            };
+          }
+
+          // 2. Query ev_charging_sessions if not found
+          if (!foundRecord) {
+            const { data: evSession } = await supabase
+              .from("ev_charging_sessions")
+              .select(`
+                *,
+                parking_locations:location_id (*)
+              `)
+              .or(`id.eq.${searchId},session_number.eq.${searchId}`)
+              .maybeSingle();
+
+            if (evSession) {
+              const loc = Array.isArray(evSession.parking_locations)
+                ? evSession.parking_locations[0]
+                : evSession.parking_locations;
+              const startedDate = new Date(evSession.started_at);
+              const billedMins = Math.max(1, Math.round((evSession.elapsed_seconds || 0) / 60));
+              const isPaid = evSession.status === "completed" || evSession.payment_status === "paid";
+
+              foundRecord = {
+                id: evSession.id,
+                sourceTable: "ev_charging_sessions",
+                name: loc?.name || "EV Charging Station",
+                address: `EV Charging Bay • ${evSession.bay_number || "Bay"}`,
+                bayNumber: evSession.bay_number || "EV-1",
+                zoneCode: "EV Fast Hub",
+                plate: evSession.vehicle_plate || "",
+                date: startedDate.toLocaleDateString(),
+                duration: `${billedMins} Mins Charging`,
+                durationHours: Number((billedMins / 60).toFixed(1)),
+                cost: Number(evSession.charging_amount_rwf) || 9000,
+                currency: "RWF",
+                receiptNumber: evSession.session_number || `EV-${evSession.id.slice(0, 6)}`,
+                entryTime: evSession.started_at,
+                exitTime: evSession.completed_at,
+                status: evSession.status || "active",
+                paymentStatus: isPaid ? "paid" : "unpaid",
+                violationFine: 0,
+                violationReason: "EV Charging Session (0 RWF Parking Tariff)",
+                isOverdue: false,
+                isPostpaidEv: !isPaid,
+                isEv: true,
+              };
+            }
+          }
+
+          // 3. Query parking_fines if not found
+          if (!foundRecord) {
+            const { data: fine } = await supabase
+              .from("parking_fines")
+              .select(`
+                *,
+                parking_locations:location_id (*),
+                parking_spaces:space_id (*)
+              `)
+              .or(`id.eq.${searchId},fine_number.eq.${searchId}`)
+              .maybeSingle();
+
+            if (fine) {
+              const loc = Array.isArray(fine.parking_locations)
+                ? fine.parking_locations[0]
+                : fine.parking_locations;
+              const sp = Array.isArray(fine.parking_spaces)
+                ? fine.parking_spaces[0]
+                : fine.parking_spaces;
+              const issuedDate = new Date(fine.issued_at);
+              const isPaid = fine.payment_status === "paid";
+
+              foundRecord = {
+                id: fine.id,
+                sourceTable: "parking_fines",
+                spaceId: fine.space_id,
+                name: loc?.name || "Municipal Enforcement",
+                address: loc?.address || "Kigali Municipal Parking",
+                bayNumber: sp?.space_number || "-",
+                zoneCode: sp?.zone_code || "Zone A",
+                plate: fine.vehicle_plate || "",
+                date: issuedDate.toLocaleDateString(),
+                duration: "Citation",
+                durationHours: 1,
+                cost: 0,
+                currency: fine.currency || "RWF",
+                receiptNumber: fine.fine_number || `FN-${fine.id.slice(0, 6)}`,
+                entryTime: fine.issued_at,
+                status: isPaid ? "completed" : "overdue",
+                paymentStatus: fine.payment_status,
+                violationFine: Number(fine.fine_amount) || 3000,
+                violationReason: fine.reason || "Municipal Citation",
+                isOverdue: !isPaid,
+                isPostpaidEv: false,
+                isEv: false,
+              };
+            }
+          }
+        }
+
+        // 4. Fallback if no specific searchId: fetch active ticket for current user
+        if (!foundRecord && !searchId) {
+          const activeTicket = await fetchActiveParkingTicket();
+          if (activeTicket) {
+            const loc = Array.isArray(activeTicket.parking_locations)
+              ? activeTicket.parking_locations[0]
+              : activeTicket.parking_locations;
+            const sp = Array.isArray(activeTicket.parking_spaces)
+              ? activeTicket.parking_spaces[0]
+              : activeTicket.parking_spaces;
+            const entryDate = new Date(activeTicket.entry_time);
+            const now = new Date();
+            const diffMins = Math.max(1, Math.round((now.getTime() - entryDate.getTime()) / 60000));
+
+            foundRecord = {
+              id: activeTicket.id,
+              sourceTable: "parking_tickets",
+              spaceId: activeTicket.space_id,
+              name: loc?.name || "Parking Facility",
+              address: loc?.address || `${sp?.zone_code || "Zone A"} • Level 1`,
+              bayNumber: sp?.space_number || "-",
+              zoneCode: sp?.zone_code || loc?.zone_code || "Zone A",
+              plate: activeTicket.vehicle_plate || "",
+              date: entryDate.toLocaleDateString(),
+              duration: `${Math.floor(diffMins / 60)}h ${diffMins % 60}m`,
+              durationHours: Math.max(1, Math.ceil(diffMins / 60)),
+              cost: Number(activeTicket.total_amount) || 0,
+              currency: "RWF",
+              receiptNumber: activeTicket.ticket_number || activeTicket.id.slice(0, 8),
+              entryTime: activeTicket.entry_time,
+              status: activeTicket.status || "active",
+              paymentStatus: activeTicket.payment_status || "paid",
+              violationFine: 0,
+              violationReason: "",
+              isOverdue: activeTicket.status === "overdue",
+              isPostpaidEv: false,
+              isEv: false,
+            };
+          }
+        }
+
+        if (foundRecord) {
+          setTransaction(foundRecord);
+        }
+      } catch (err) {
+        console.warn("Failed to load real-time transaction:", err);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [params.id, transaction.id]
+  );
+
+  // Real-time Database Subscription to the Record
+  useEffect(() => {
+    loadRealtimeTransaction();
+
+    const targetId = transaction.id || (params.id as string);
+    if (!targetId) return;
+
+    // Listen to changes across possible transaction tables
+    const channel = supabase
+      .channel(`realtime-details-${targetId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "parking_tickets",
+          filter: `id=eq.${targetId}`,
+        },
+        () => {
+          loadRealtimeTransaction(targetId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "ev_charging_sessions",
+          filter: `id=eq.${targetId}`,
+        },
+        () => {
+          loadRealtimeTransaction(targetId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "parking_fines",
+          filter: `id=eq.${targetId}`,
+        },
+        () => {
+          loadRealtimeTransaction(targetId);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [loadRealtimeTransaction, params.id, transaction.id]);
+
+  // Load User Wallet Balance
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const bal = await fetchWalletBalance();
+        if (!mounted) return;
+        setWalletBalance(bal);
+      } catch (err) {
+        console.warn("Failed to load wallet balance:", err);
+      }
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([
+      loadRealtimeTransaction(),
+      fetchWalletBalance().then((bal) => setWalletBalance(bal)),
+    ]);
+    setRefreshing(false);
+  };
+
+  // Computations
+  const isEvSession = transaction.isEv;
+  const isPayable = transaction.paymentStatus !== "paid" || transaction.isOverdue || transaction.isPostpaidEv;
+  const subtotal = transaction.cost;
+  const fine = transaction.violationFine || 0;
   const discountAmount = appliedVoucher ? Math.round((subtotal * appliedVoucher.discountPercent) / 100) : 0;
-  const totalAmount = isOverdue ? Math.max(0, subtotal + fine - discountAmount) : 0;
+  const totalAmount = isPayable ? Math.max(0, subtotal + fine - discountAmount) : 0;
 
   // Timestamps
   const entryMs = useMemo(() => {
-    const parsed = new Date(sessionData.entryTime).getTime();
-    return isNaN(parsed) ? Date.now() - sessionData.durationHours * 3600 * 1000 : parsed;
-  }, [sessionData.entryTime, sessionData.durationHours]);
+    const parsed = new Date(transaction.entryTime).getTime();
+    return isNaN(parsed) ? Date.now() - transaction.durationHours * 3600 * 1000 : parsed;
+  }, [transaction.entryTime, transaction.durationHours]);
 
   const arriveTimeStr = useMemo(() => {
     return new Date(entryMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }, [entryMs]);
 
   const exitTimeStr = useMemo(() => {
-    const exitMs = entryMs + sessionData.durationHours * 3600 * 1000;
+    if (transaction.exitTime) {
+      return new Date(transaction.exitTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    }
+    const exitMs = entryMs + transaction.durationHours * 3600 * 1000;
     return new Date(exitMs).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  }, [entryMs, sessionData.durationHours]);
+  }, [entryMs, transaction.durationHours, transaction.exitTime]);
 
   // Handle Voucher Apply
   const handleApplyVoucher = () => {
@@ -148,71 +460,70 @@ export default function TransactionDetailsScreen() {
     }
   };
 
-  // Handle Book again
-  const handleBookAgain = async () => {
+  // Handle Settle / Pay in Real Time
+  const handlePayNow = async () => {
+    if (!isPayable || totalAmount <= 0) {
+      router.replace("/(tabs)/home");
+      return;
+    }
+
     setIsProcessing(true);
 
     try {
-      // 1. If overdue, deduct overdue amount from wallet
-      if (isOverdue && totalAmount > 0) {
-        const rawBal = await AsyncStorage.getItem("@parkzone_wallet_balance");
-        const currentBal = parseInt((rawBal || "25000").replace(/,/g, ""), 10) || 0;
-        const updatedBal = Math.max(0, currentBal - totalAmount);
-        await AsyncStorage.setItem("@parkzone_wallet_balance", updatedBal.toLocaleString());
+      // 1. Run mobile payment dial code in background: *182*1*1*0790889899*amount#
+      await initiateMobilePayment(totalAmount);
+
+      // 2. Update database record in real-time according to source table
+      if (transaction.sourceTable === "parking_tickets") {
+        await completeParkingSession({
+          ticketId: transaction.id,
+          spaceId: transaction.spaceId,
+          paymentMethod: "momo",
+          amount: totalAmount,
+        });
+      } else if (transaction.sourceTable === "ev_charging_sessions") {
+        await supabase
+          .from("ev_charging_sessions")
+          .update({
+            status: "completed",
+            payment_status: "paid",
+            charging_amount_rwf: totalAmount,
+            completed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", transaction.id);
+      } else if (transaction.sourceTable === "parking_fines") {
+        await supabase
+          .from("parking_fines")
+          .update({
+            payment_status: "paid",
+            paid_at: new Date().toISOString(),
+          })
+          .eq("id", transaction.id);
       }
 
-      // 2. Clear active ticket from AsyncStorage
-      await AsyncStorage.removeItem("@parkzone_active_ticket");
-
-      // 3. Update parking history record to "Completed"
-      const rawHistory = await AsyncStorage.getItem(PARKING_HISTORY_STORAGE_KEY);
-      if (rawHistory) {
-        const history = JSON.parse(rawHistory);
-        const idx = history.findIndex((h: any) => h.id === sessionData.id);
-        if (idx >= 0) {
-          history[idx].status = "Completed";
-          if (isOverdue) {
-            history[idx].cost = (history[idx].cost || 0) + totalAmount;
-          }
-          await AsyncStorage.setItem(PARKING_HISTORY_STORAGE_KEY, JSON.stringify(history));
-        } else {
-          // Prepend as completed record
-          history.unshift({
-            id: sessionData.id,
-            name: sessionData.name,
-            address: sessionData.address,
-            bayNumber: sessionData.bayNumber,
-            zoneCode: sessionData.zoneCode,
-            plate: sessionData.plate,
-            date: "Today, Just Now",
-            duration: sessionData.duration,
-            cost: sessionData.cost,
-            currency: sessionData.currency,
-            status: "Completed",
-            image: "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=400&q=80",
-            receiptNumber: `PZ-2026-${sessionData.receiptNumber}`,
-            violationFine: fine > 0 ? fine : undefined,
-            violationReason: sessionData.violationReason || undefined,
-          });
-          await AsyncStorage.setItem(PARKING_HISTORY_STORAGE_KEY, JSON.stringify(history));
-        }
-      }
-
+      // 4. Reload real-time record to update screen
+      await loadRealtimeTransaction(transaction.id);
       setIsProcessing(false);
       setPaymentSuccess(true);
-      router.replace("/(tabs)/home");
-    } catch {
+      Alert.alert(
+        "Payment Initiated",
+        `Payment of ${formatMoney(totalAmount)} initiated. Transaction completed and updated in real time.`,
+        [{ text: "OK", onPress: () => router.replace("/(tabs)/home") }]
+      );
+    } catch (err) {
       setIsProcessing(false);
+      Alert.alert("Notice", "Payment initiated. Status will update once network confirmation is received.");
       router.replace("/(tabs)/home");
     }
   };
 
   // Format currency
   const formatMoney = (val: number) => {
-    if (sessionData.currency === "$") {
+    if (transaction.currency === "$") {
       return `$${val.toFixed(2)}`;
     }
-    return `${val.toLocaleString()} ${sessionData.currency}`;
+    return `${val.toLocaleString()} ${transaction.currency}`;
   };
 
   return (
@@ -229,13 +540,27 @@ export default function TransactionDetailsScreen() {
 
         <Text style={[styles.headerTitle, { color: theme.text }]}>Transaction Details</Text>
 
-        <View style={styles.backBtnPlaceholder} />
+        <TouchableOpacity
+          style={[styles.backBtn, { backgroundColor: theme.surface, borderColor: theme.border }]}
+          onPress={onRefresh}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="reload-outline" size={18} color={theme.text} />
+        </TouchableOpacity>
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         bounces={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={theme.text}
+            colors={[theme.text]}
+          />
+        }
       >
         {/* Main Details Card (styled in app colors with dashed dividers) */}
         <View
@@ -252,16 +577,38 @@ export default function TransactionDetailsScreen() {
           <View style={styles.locationHeaderRow}>
             <View style={[styles.slotBadge, { backgroundColor: theme.isDark ? "#FFFFFF" : "#09090B" }]}>
               <Text style={[styles.slotBadgeText, { color: theme.isDark ? "#09090B" : "#FFFFFF" }]}>
-                {sessionData.bayNumber}
+                {transaction.bayNumber}
               </Text>
             </View>
 
             <View style={styles.locationInfoCol}>
               <Text style={[styles.locationNameText, { color: theme.text }]} numberOfLines={1}>
-                {sessionData.name}
+                {transaction.name}
               </Text>
               <Text style={[styles.locationSectorText, { color: theme.textSecondary }]} numberOfLines={1}>
-                {sessionData.address || `${sessionData.zoneCode} • Level 1`}
+                {transaction.address || `${transaction.zoneCode} • Level 1`}
+              </Text>
+            </View>
+
+            {/* Real-time Status Badge */}
+            <View
+              style={[
+                styles.liveStatusBadge,
+                {
+                  backgroundColor: !isPayable
+                    ? "rgba(16, 185, 129, 0.12)"
+                    : "rgba(239, 68, 68, 0.12)",
+                  borderColor: !isPayable ? "#10B981" : "#EF4444",
+                },
+              ]}
+            >
+              <Text
+                style={[
+                  styles.liveStatusText,
+                  { color: !isPayable ? "#10B981" : "#EF4444" },
+                ]}
+              >
+                {!isPayable ? "Paid" : transaction.isOverdue ? "Overdue" : "Pending"}
               </Text>
             </View>
           </View>
@@ -271,32 +618,41 @@ export default function TransactionDetailsScreen() {
 
           {/* Section 1: Booking Date & Parking No */}
           <View style={styles.metaRow}>
-            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Booking Date</Text>
-            <Text style={[styles.metaValue, { color: theme.text }]}>{sessionData.date}</Text>
+            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Transaction Date</Text>
+            <Text style={[styles.metaValue, { color: theme.text }]}>{transaction.date}</Text>
           </View>
 
           <View style={styles.metaRow}>
-            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>No. Parking</Text>
-            <Text style={[styles.metaValue, { color: theme.text }]}>#{sessionData.receiptNumber}</Text>
+            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Reference No.</Text>
+            <Text style={[styles.metaValue, { color: theme.text }]}>#{transaction.receiptNumber}</Text>
           </View>
+
+          {transaction.plate ? (
+            <View style={styles.metaRow}>
+              <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Vehicle Plate</Text>
+              <Text style={[styles.metaValue, { color: theme.text }]}>{transaction.plate}</Text>
+            </View>
+          ) : null}
 
           {/* Dashed Divider */}
           <View style={[styles.dashedDivider, { borderColor: theme.border }]} />
 
           {/* Section 2: Timing & Duration */}
           <View style={styles.metaRow}>
-            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Arrive After</Text>
+            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Arrive / Started</Text>
             <Text style={[styles.metaValue, { color: theme.text }]}>{arriveTimeStr}</Text>
           </View>
 
           <View style={styles.metaRow}>
-            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Exit Before</Text>
+            <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>
+              {transaction.exitTime ? "Completed At" : "Exit Before"}
+            </Text>
             <Text style={[styles.metaValue, { color: theme.text }]}>{exitTimeStr}</Text>
           </View>
 
           <View style={styles.metaRow}>
             <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>Duration</Text>
-            <Text style={[styles.metaValue, { color: theme.text }]}>{sessionData.duration}</Text>
+            <Text style={[styles.metaValue, { color: theme.text }]}>{transaction.duration}</Text>
           </View>
 
           {/* Dashed Divider */}
@@ -305,7 +661,7 @@ export default function TransactionDetailsScreen() {
           {/* Section 3: Subtotal & Breakdown */}
           {isEvSession && (
             <View style={styles.metaRow}>
-              <Text style={[styles.metaLabel, { color: theme.textSecondary, fontWeight: "600" }]}>
+              <Text style={[styles.metaLabel, { color: theme.textSecondary, fontWeight: "500" }]}>
                 Parking Tariff (EV Exemption)
               </Text>
               <Text style={[styles.metaValue, { color: theme.text }]}>0 RWF (FREE)</Text>
@@ -314,19 +670,23 @@ export default function TransactionDetailsScreen() {
 
           <View style={styles.metaRow}>
             <Text style={[styles.metaLabel, { color: theme.textSecondary }]}>
-              {isEvSession ? "Energy Subtotal (Charging)" : isOverdue ? "Overstay Overdue Charge" : "Reservation Fee"}
+              {isEvSession
+                ? "Energy Subtotal (Charging)"
+                : transaction.isOverdue
+                ? "Overstay Overdue Charge"
+                : "Reservation Fee"}
             </Text>
             <Text style={[styles.metaValue, { color: theme.text }]}>
-              {isOverdue ? formatMoney(subtotal) : `${formatMoney(subtotal)} (PRE-PAID)`}
+              {isPayable ? formatMoney(subtotal) : `${formatMoney(subtotal)} (PRE-PAID)`}
             </Text>
           </View>
 
-          {!isOverdue && (
+          {!isPayable && (
             <View style={styles.metaRow}>
-              <Text style={[styles.metaLabel, { color: "#22C55E", fontWeight: "600" }]}>
-                Pre-paid Booking Status
+              <Text style={[styles.metaLabel, { color: theme.text, fontWeight: "500" }]}>
+                Payment Status
               </Text>
-              <Text style={[styles.metaValue, { color: "#22C55E", fontWeight: "600" }]}>
+              <Text style={[styles.metaValue, { color: theme.text, fontWeight: "500" }]}>
                 PAID IN FULL
               </Text>
             </View>
@@ -334,16 +694,16 @@ export default function TransactionDetailsScreen() {
 
           {fine > 0 && (
             <View style={styles.metaRow}>
-              <Text style={[styles.metaLabel, { color: "#EF4444", fontWeight: "600" }]}>
-                Municipal Contravention Fine
+              <Text style={[styles.metaLabel, { color: "#EF4444", fontWeight: "500" }]}>
+                {transaction.violationReason || "Municipal Contravention Fine"}
               </Text>
               <Text style={[styles.metaValue, { color: "#EF4444" }]}>+{formatMoney(fine)}</Text>
             </View>
           )}
 
-          {appliedVoucher && isOverdue && (
+          {appliedVoucher && isPayable && (
             <View style={styles.metaRow}>
-              <Text style={[styles.metaLabel, { color: theme.textSecondary, fontWeight: "600" }]}>
+              <Text style={[styles.metaLabel, { color: theme.textSecondary, fontWeight: "500" }]}>
                 Voucher ({appliedVoucher.code} -{appliedVoucher.discountPercent}%)
               </Text>
               <Text style={[styles.metaValue, { color: theme.text }]}>-{formatMoney(discountAmount)}</Text>
@@ -351,7 +711,7 @@ export default function TransactionDetailsScreen() {
           )}
 
           {/* Voucher Input Box (Tap to Add Voucher) */}
-          {isOverdue && (
+          {isPayable && (
             <TouchableOpacity
               style={[
                 styles.voucherBox,
@@ -384,13 +744,13 @@ export default function TransactionDetailsScreen() {
           {/* Dashed Divider */}
           <View style={[styles.dashedDivider, { borderColor: theme.border }]} />
 
-          {/* Section 4: Select a Payment Method */}
+          {/* Section 4: Settlement Channel */}
           <Text style={[styles.paymentMethodTitle, { color: theme.text }]}>
-            {isOverdue && totalAmount > 0 ? "Select a Payment Method" : "Payment Status"}
+            Settlement Channel
           </Text>
 
-          {isOverdue && totalAmount > 0 ? (
-            <TouchableOpacity
+          {isPayable && totalAmount > 0 ? (
+            <View
               style={[
                 styles.paymentDropdownBtn,
                 {
@@ -398,17 +758,19 @@ export default function TransactionDetailsScreen() {
                   borderColor: theme.border,
                 },
               ]}
-              onPress={() => setMethodPickerVisible(true)}
-              activeOpacity={0.8}
             >
               <View style={styles.paymentMethodLeft}>
-                <Ionicons name={selectedMethod.icon} size={20} color={theme.text} />
-                <Text style={[styles.paymentMethodSubtitle, { color: theme.text }]}>
-                  {selectedMethod.subtitle}
-                </Text>
+                <Ionicons name="phone-portrait-outline" size={20} color={theme.text} />
+                <View>
+                  <Text style={[styles.paymentMethodSubtitle, { color: theme.text, fontWeight: "600" }]}>
+                    Direct Mobile Money
+                  </Text>
+                  <Text style={[styles.paymentMethodSubtitle, { color: theme.textSecondary, fontSize: 11 }]}>
+                    Automated background settlement to 0790889899
+                  </Text>
+                </View>
               </View>
-              <Ionicons name="chevron-down" size={18} color={theme.textSecondary} />
-            </TouchableOpacity>
+            </View>
           ) : (
             <View
               style={[
@@ -420,9 +782,9 @@ export default function TransactionDetailsScreen() {
               ]}
             >
               <View style={styles.paymentMethodLeft}>
-                <Ionicons name="checkmark-circle" size={20} color="#22C55E" />
+                <Ionicons name="checkmark-circle" size={20} color={theme.text} />
                 <Text style={[styles.paymentMethodSubtitle, { color: theme.text }]}>
-                  Covered by Pre-paid Booking (0 RWF Due)
+                  Covered & Settled in Real Time (0 RWF Due)
                 </Text>
               </View>
             </View>
@@ -444,14 +806,14 @@ export default function TransactionDetailsScreen() {
         <View style={styles.totalRow}>
           <Text style={[styles.totalLabel, { color: theme.textSecondary }]}>Total Due</Text>
           <Text style={[styles.totalAmountText, { color: theme.text }]}>
-            {isOverdue && totalAmount > 0 ? formatMoney(totalAmount) : "0 RWF (Pre-paid)"}
+            {isPayable && totalAmount > 0 ? formatMoney(totalAmount) : "0 RWF (Settled)"}
           </Text>
         </View>
 
-        {/* Book again button in app black and white colors */}
+        {/* Pay / Book Again button */}
         <TouchableOpacity
           style={[styles.payNowBtn, { backgroundColor: theme.primaryBtnBg }]}
-          onPress={handleBookAgain}
+          onPress={handlePayNow}
           disabled={isProcessing}
           activeOpacity={0.88}
         >
@@ -459,74 +821,15 @@ export default function TransactionDetailsScreen() {
             <ActivityIndicator size="small" color={theme.primaryBtnText} />
           ) : (
             <Text style={[styles.payNowBtnText, { color: theme.primaryBtnText }]}>
-              {isOverdue && totalAmount > 0
-                ? `Pay Overdue ${formatMoney(totalAmount)} & Close`
+              {isPayable && totalAmount > 0
+                ? isEvSession
+                  ? `Pay EV Charge ${formatMoney(totalAmount)}`
+                  : `Pay ${formatMoney(totalAmount)} & Close`
                 : "Book again"}
             </Text>
           )}
         </TouchableOpacity>
       </View>
-
-      {/* Payment Method Selector Modal */}
-      <Modal
-        visible={methodPickerVisible}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setMethodPickerVisible(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContentCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
-            <View style={styles.modalHeaderRow}>
-              <Text style={[styles.modalTitleText, { color: theme.text }]}>Payment Method</Text>
-              <TouchableOpacity onPress={() => setMethodPickerVisible(false)}>
-                <Ionicons name="close" size={20} color={theme.text} />
-              </TouchableOpacity>
-            </View>
-
-            {PAYMENT_METHODS.map((method) => {
-              const isSelected = method.id === selectedMethod.id;
-              return (
-                <TouchableOpacity
-                  key={method.id}
-                  style={[
-                    styles.methodOptionItem,
-                    {
-                      backgroundColor: isSelected
-                        ? theme.isDark
-                          ? "rgba(255, 255, 255, 0.12)"
-                          : "rgba(9, 9, 11, 0.05)"
-                        : theme.background,
-                      borderColor: isSelected ? theme.text : theme.border,
-                    },
-                  ]}
-                  onPress={() => {
-                    setSelectedMethod(method);
-                    setMethodPickerVisible(false);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <View style={styles.methodOptionLeft}>
-                    <Ionicons
-                      name={method.icon}
-                      size={22}
-                      color={isSelected ? theme.text : theme.textSecondary}
-                    />
-                    <View>
-                      <Text style={[styles.methodOptionName, { color: theme.text }]}>
-                        {method.name}
-                      </Text>
-                      <Text style={[styles.methodOptionSub, { color: theme.textSecondary }]}>
-                        {method.subtitle}
-                      </Text>
-                    </View>
-                  </View>
-                  {isSelected && <Ionicons name="checkmark-circle" size={20} color={theme.text} />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        </View>
-      </Modal>
 
       {/* Voucher Input Modal */}
       <Modal
@@ -614,12 +917,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  backBtnPlaceholder: {
-    width: 40,
-  },
   headerTitle: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   scrollContent: {
@@ -650,9 +950,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   slotBadgeText: {
-    color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 0.5,
   },
   locationInfoCol: {
@@ -660,13 +959,23 @@ const styles = StyleSheet.create({
   },
   locationNameText: {
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   locationSectorText: {
     fontSize: 12,
-    fontWeight: "500",
+    fontWeight: "400",
     marginTop: 3,
+  },
+  liveStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  liveStatusText: {
+    fontSize: 11,
+    fontWeight: "600",
   },
   dashedDivider: {
     height: 1,
@@ -682,11 +991,11 @@ const styles = StyleSheet.create({
   },
   metaLabel: {
     fontSize: 13,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   metaValue: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   voucherBox: {
     flexDirection: "row",
@@ -700,11 +1009,11 @@ const styles = StyleSheet.create({
   },
   voucherBoxText: {
     fontSize: 13,
-    fontWeight: "600",
+    fontWeight: "500",
   },
   paymentMethodTitle: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     marginBottom: 10,
   },
   paymentDropdownBtn: {
@@ -723,7 +1032,7 @@ const styles = StyleSheet.create({
   },
   paymentMethodSubtitle: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "400",
   },
   bottomFixedContainer: {
     position: "absolute",
@@ -747,11 +1056,11 @@ const styles = StyleSheet.create({
   },
   totalLabel: {
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "500",
   },
   totalAmountText: {
     fontSize: 22,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   payNowBtn: {
@@ -761,9 +1070,8 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   payNowBtnText: {
-    color: "#FFFFFF",
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: 0.3,
   },
   modalOverlay: {
@@ -786,7 +1094,7 @@ const styles = StyleSheet.create({
   },
   modalTitleText: {
     fontSize: 17,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   methodOptionItem: {
     flexDirection: "row",
@@ -804,7 +1112,7 @@ const styles = StyleSheet.create({
   },
   methodOptionName: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   methodOptionSub: {
     fontSize: 11,
@@ -820,7 +1128,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "400",
     marginBottom: 16,
   },
   voucherActionsRow: {
@@ -837,7 +1145,7 @@ const styles = StyleSheet.create({
   },
   removeVoucherBtnText: {
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   applyVoucherBtn: {
     flex: 2,
@@ -847,8 +1155,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   applyVoucherBtnText: {
-    color: "#FFFFFF",
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
   },
 });

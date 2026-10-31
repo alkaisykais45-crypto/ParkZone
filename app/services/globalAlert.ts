@@ -165,3 +165,8 @@ export const setupGlobalAlertInterceptor = () => {
 
 // Auto-initialize interceptor on module load
 setupGlobalAlertInterceptor();
+
+export default function () {
+  return null;
+}
+

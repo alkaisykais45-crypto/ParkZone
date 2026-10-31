@@ -43,11 +43,11 @@ export const DynamicIslandParking: React.FC<DynamicIslandParkingProps> = ({
     if (active && !prevActiveRef.current) {
       // Session newly started -> Start native Dynamic Island Activity
       startParkingActivity(
-        bayNumber || "A-01",
+        bayNumber || "-",
         locationName || "ParkZone Parking",
-        plate || "RAD ••• B",
-        totalSeconds || 7200,
-        remainingSeconds || 7200
+        plate || "",
+        totalSeconds || 3600,
+        remainingSeconds || 3600
       );
     } else if (!active && prevActiveRef.current) {
       // Session ended -> Dismiss native Dynamic Island Activity

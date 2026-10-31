@@ -1,8 +1,7 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   Dimensions,
   Image,
-  Platform,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -10,24 +9,44 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
 import { GlassBackground } from "../../components/GlassBackground";
 import { useTheme } from "../../hooks/useTheme";
+import { ParkingLocation, fetchParkingLocations } from "../services/parking";
 
 const { width } = Dimensions.get("window");
 const cardWidth = Math.min(width * 0.78, 310);
 const cardHeight = 230;
 
-// High-resolution photography of modern parking infrastructure & Kigali architecture
-const HERO_IMAGE_TOP =
-  "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=800&q=80"; // Kigali Heights modern parking
-const HERO_IMAGE_MID =
-  "https://images.unsplash.com/photo-1590674899484-d5640e854abe?auto=format&fit=crop&w=800&q=80"; // Downtown parking lot
+// High-resolution photography of modern parking infrastructure & EV grids
+const DEFAULT_HERO_TOP =
+  "https://images.unsplash.com/photo-1506521781263-d8422e82f27a?auto=format&fit=crop&w=800&q=80";
+const DEFAULT_HERO_MID =
+  "https://images.unsplash.com/photo-1590674899484-d5640e854abe?auto=format&fit=crop&w=800&q=80";
+const DEFAULT_HERO_BACK =
+  "https://images.unsplash.com/photo-1573348722427-f1d6819fdf98?auto=format&fit=crop&w=800&q=80";
 
 export default function WelcomePage() {
   const router = useRouter();
   const theme = useTheme();
+  const [liveLocations, setLiveLocations] = useState<ParkingLocation[]>([]);
+
+  useEffect(() => {
+    let mounted = true;
+    fetchParkingLocations()
+      .then((rows) => {
+        if (mounted) setLiveLocations(rows);
+      })
+      .catch(() => {
+        if (mounted) setLiveLocations([]);
+      });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const topLocation = liveLocations[0] || null;
+  const midLocation = liveLocations[1] || liveLocations[0] || null;
 
   return (
     <GlassBackground>
@@ -37,7 +56,7 @@ export default function WelcomePage() {
           <View style={styles.brandTextBox}>
             <Text style={[styles.brandTitle, { color: theme.text }]}>ParkZone</Text>
             <Text style={[styles.brandSubtitle, { color: theme.textSecondary }]}>
-              Kigali Smart Urban Grid
+              Smart Parking & EV Grid
             </Text>
           </View>
 
@@ -56,20 +75,28 @@ export default function WelcomePage() {
           </TouchableOpacity>
         </View>
 
-        {/* Center Stage: 3 Stacked Floating Glassmorphic Cards with Real Photography */}
+        {/* Center Stage: 3 Stacked Floating Glassmorphic Cards Synced with Database */}
         <View style={styles.cardsStage}>
-          {/* Card 1: Background Silhouette Glass Layer */}
+          {/* Card 1: Background Silhouette Glass Layer with Real Infrastructure Image */}
           <View
             style={[
               styles.stackCardBackdrop,
               {
                 backgroundColor: theme.isDark ? "rgba(255, 255, 255, 0.03)" : "rgba(0, 0, 0, 0.03)",
                 borderColor: theme.isDark ? "rgba(255, 255, 255, 0.08)" : "rgba(0, 0, 0, 0.06)",
+                overflow: "hidden",
               },
             ]}
-          />
+          >
+            <Image
+              source={{ uri: DEFAULT_HERO_BACK }}
+              style={styles.cardCoverImage}
+              resizeMode="cover"
+            />
+            <View style={styles.imageDarkGradient} />
+          </View>
 
-          {/* Card 2: Middle Floating Glassmorphic Card */}
+          {/* Card 2: Middle Floating Glassmorphic Card with Real Image */}
           <View
             style={[
               styles.stackCardMiddle,
@@ -81,10 +108,9 @@ export default function WelcomePage() {
               },
             ]}
           >
-            {/* Real Photograph */}
             <View style={styles.cardImageContainer}>
               <Image
-                source={{ uri: HERO_IMAGE_MID }}
+                source={{ uri: midLocation?.image_url || DEFAULT_HERO_MID }}
                 style={styles.cardCoverImage}
                 resizeMode="cover"
               />
@@ -101,16 +127,22 @@ export default function WelcomePage() {
                 ]}
               >
                 <View style={[styles.chipDot, { backgroundColor: theme.isDark ? "#FFFFFF" : "#09090B" }]} />
-                <Text style={[styles.chipText, { color: theme.text }]}>CBD Lot • Sensor Sync</Text>
+                <Text style={[styles.chipText, { color: theme.text }]}>
+                  {midLocation ? `${midLocation.zone_code || "Live"} • Sensor Sync` : "Realtime Telemetry"}
+                </Text>
               </View>
             </View>
 
             {/* Bottom Glass Info Row */}
             <View style={styles.cardInfoRow}>
               <View style={styles.cardInfoTextGroup}>
-                <Text style={[styles.cardMainTitle, { color: theme.text }]}>Downtown Parking</Text>
-                <Text style={[styles.cardMainSub, { color: theme.textSecondary }]}>
-                  KN 4 Ave • 18 Available
+                <Text style={[styles.cardMainTitle, { color: theme.text }]} numberOfLines={1}>
+                  {midLocation ? midLocation.name : "Live Parking Network"}
+                </Text>
+                <Text style={[styles.cardMainSub, { color: theme.textSecondary }]} numberOfLines={1}>
+                  {midLocation
+                    ? `${midLocation.address} • ${midLocation.available_spots} Available`
+                    : "300 RWF/hr • Realtime bay availability"}
                 </Text>
               </View>
               <View
@@ -123,13 +155,13 @@ export default function WelcomePage() {
                 ]}
               >
                 <Text style={[styles.cardActionPillText, { color: theme.text }]}>
-                  Active
+                  Live
                 </Text>
               </View>
             </View>
           </View>
 
-          {/* Card 3: Top Tilted Hero Glassmorphic Card */}
+          {/* Card 3: Top Tilted Hero Glassmorphic Card with Real Image */}
           <View
             style={[
               styles.stackCardTop,
@@ -141,10 +173,9 @@ export default function WelcomePage() {
               },
             ]}
           >
-            {/* Real Photograph */}
             <View style={styles.topCardImageContainer}>
               <Image
-                source={{ uri: HERO_IMAGE_TOP }}
+                source={{ uri: topLocation?.image_url || DEFAULT_HERO_TOP }}
                 style={styles.cardCoverImage}
                 resizeMode="cover"
               />
@@ -161,18 +192,22 @@ export default function WelcomePage() {
                 ]}
               >
                 <Ionicons name="flash" size={11} color={theme.text} />
-                <Text style={[styles.chipText, { color: theme.text }]}>Kigali Heights • Zone C</Text>
+                <Text style={[styles.chipText, { color: theme.text }]}>
+                  {topLocation ? `${topLocation.name}` : "EV Charging & Smart Bays"}
+                </Text>
               </View>
             </View>
 
             {/* Bottom Info Row */}
             <View style={styles.cardInfoRow}>
               <View style={styles.cardInfoTextGroup}>
-                <Text style={[styles.cardMainTitle, { color: theme.text }]}>
-                  Kigali Heights
+                <Text style={[styles.cardMainTitle, { color: theme.text }]} numberOfLines={1}>
+                  {topLocation ? topLocation.name : "ParkZone Smart Grid"}
                 </Text>
-                <Text style={[styles.cardMainSub, { color: theme.textSecondary }]}>
-                  24 Free • CCS2 EV Fast Bay
+                <Text style={[styles.cardMainSub, { color: theme.textSecondary }]} numberOfLines={1}>
+                  {topLocation
+                    ? `${topLocation.available_spots} Free • ${topLocation.hourly_rate} RWF/hr`
+                    : "Live Database Occupancy & EV Telemetry"}
                 </Text>
               </View>
 
@@ -302,12 +337,12 @@ const styles = StyleSheet.create({
   brandTextBox: {},
   brandTitle: {
     fontSize: 19,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.4,
   },
   brandSubtitle: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "400",
     letterSpacing: 0.2,
   },
   skipBtn: {
@@ -318,7 +353,7 @@ const styles = StyleSheet.create({
   },
   skipText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
   },
 
   /* 3 Stacked Cards Stage */
@@ -393,7 +428,7 @@ const styles = StyleSheet.create({
   },
   chipText: {
     fontSize: 10.5,
-    fontWeight: "800",
+    fontWeight: "500",
     letterSpacing: 0.2,
   },
   cardInfoRow: {
@@ -408,12 +443,12 @@ const styles = StyleSheet.create({
   },
   cardMainTitle: {
     fontSize: 14.5,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   cardMainSub: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "400",
     marginTop: 2,
   },
   cardActionPill: {
@@ -426,7 +461,7 @@ const styles = StyleSheet.create({
   },
   cardActionPillText: {
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 
   /* Top Tilted Card */
@@ -501,12 +536,12 @@ const styles = StyleSheet.create({
   },
   tagText: {
     fontSize: 9.5,
-    fontWeight: "900",
+    fontWeight: "500",
     letterSpacing: 0.8,
   },
   heroHeadline: {
     fontSize: 32,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: -0.8,
     lineHeight: 38,
     marginBottom: 8,
@@ -536,7 +571,7 @@ const styles = StyleSheet.create({
   },
   getStartedText: {
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   arrowCircle: {

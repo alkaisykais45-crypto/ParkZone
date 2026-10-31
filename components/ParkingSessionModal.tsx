@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Animated,
   Dimensions,
+  Easing,
   Modal,
   Platform,
   StyleSheet,
@@ -11,13 +13,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
+import Svg, { Circle } from "react-native-svg";
 import { router } from "expo-router";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useTheme } from "../hooks/useTheme";
-import { PARKING_HISTORY_STORAGE_KEY } from "../app/recent_parkings";
+import { completeParkingSession } from "../app/services/parking";
 
 const { width } = Dimensions.get("window");
+
+const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 
 export interface ParkingSessionModalItem {
   id: string;
@@ -29,6 +32,7 @@ export interface ParkingSessionModalItem {
   date?: string;
   duration?: string;
   durationHours?: number;
+  hourlyRate?: number;
   cost?: number;
   currency?: string;
   status?: "Active" | "Completed" | "Closed";
@@ -124,10 +128,65 @@ export const ParkingSessionModal = ({
   const strokeWidth = 16;
   const radius = (svgSize - strokeWidth * 2) / 2;
   const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference * (1 - progress);
 
-  const activeColor = isOverdue ? "#EF4444" : (theme.isDark ? "#FFFFFF" : "#09090B");
-  const trackColor = theme.isDark ? "rgba(255, 255, 255, 0.10)" : "#E4E4E7";
+  // Animation values for breathing pulse and smooth progress
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const glowOpacity = useRef(new Animated.Value(0.2)).current;
+  const progressAnim = useRef(new Animated.Value(progress)).current;
+
+  useEffect(() => {
+    Animated.timing(progressAnim, {
+      toValue: progress,
+      duration: 500,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: false,
+    }).start();
+  }, [progress]);
+
+  useEffect(() => {
+    const pulseLoop = Animated.loop(
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(pulseAnim, {
+            toValue: isOverdue ? 1.08 : 1.04,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowOpacity, {
+            toValue: isOverdue ? 0.7 : 0.45,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.parallel([
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+          Animated.timing(glowOpacity, {
+            toValue: 0.15,
+            duration: isOverdue ? 700 : 1600,
+            easing: Easing.inOut(Easing.ease),
+            useNativeDriver: true,
+          }),
+        ]),
+      ])
+    );
+    pulseLoop.start();
+    return () => pulseLoop.stop();
+  }, [isOverdue]);
+
+  const animatedStrokeDashoffset = progressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [circumference, 0],
+  });
+
+  const activeColor = isOverdue ? theme.danger : theme.accent;
+  const trackColor = theme.pillInactiveBg;
 
   return (
     <Modal visible={visible} animationType="slide" transparent={false} onRequestClose={onClose}>
@@ -147,8 +206,23 @@ export const ParkingSessionModal = ({
           <View style={styles.headerSpacer} />
         </View>
 
-        {/* Center Circular Progress Dial */}
+        {/* Center Circular Progress Dial with Breathing Glow Animation */}
         <View style={styles.dialCenterWrapper}>
+          {/* Animated Glow Aura */}
+          <Animated.View
+            style={[
+              styles.dialGlowAura,
+              {
+                width: svgSize + 24,
+                height: svgSize + 24,
+                borderRadius: (svgSize + 24) / 2,
+                backgroundColor: isOverdue ? theme.dangerSoft : theme.accentSoft,
+                opacity: glowOpacity,
+                transform: [{ scale: pulseAnim }],
+              },
+            ]}
+          />
+
           <View style={[styles.svgRingContainer, { width: svgSize, height: svgSize }]}>
             <Svg width={svgSize} height={svgSize} viewBox={`0 0 ${svgSize} ${svgSize}`}>
               {/* Background Track Circle */}
@@ -162,14 +236,14 @@ export const ParkingSessionModal = ({
               />
 
               {/* Active Progress Arc */}
-              <Circle
+              <AnimatedCircle
                 cx={svgSize / 2}
                 cy={svgSize / 2}
                 r={radius}
                 stroke={activeColor}
                 strokeWidth={strokeWidth}
                 strokeDasharray={circumference}
-                strokeDashoffset={strokeDashoffset}
+                strokeDashoffset={animatedStrokeDashoffset as any}
                 strokeLinecap="round"
                 fill="none"
                 transform={`translate(${svgSize}, 0) scale(-1, 1) rotate(-90 ${svgSize / 2} ${svgSize / 2})`}
@@ -193,7 +267,7 @@ export const ParkingSessionModal = ({
               ? isOverdue
                 ? `+${formatTimerDigits(elapsedSeconds - totalSeconds)}`
                 : formatTimerDigits(remainingSeconds)
-              : session.duration || "00:20:15"}
+              : session.duration || "00:00:00"}
           </Text>
 
           <Text style={[styles.timerSubLabel, { color: theme.textSecondary }]}>
@@ -254,7 +328,7 @@ export const ParkingSessionModal = ({
             onPress={() => {
               Alert.alert(
                 "Find My Vehicle",
-                `Your vehicle (${session.plate || "RAD ••• B"}) is parked in Slot ${session.bayNumber} at ${session.name}.\n\nFollow pedestrian wayfinding arrows to Level 1, Aisle 2.`,
+                `Your vehicle${session.plate ? ` (${session.plate})` : ""} is parked in Slot ${session.bayNumber} at ${session.name}.`,
                 [
                   { text: "Dismiss", style: "cancel" },
                   {
@@ -304,32 +378,32 @@ export const ParkingSessionModal = ({
                   if (onEndParking) {
                     onEndParking();
                   } else {
+                    const rate =
+                      session.hourlyRate ??
+                      (session.cost && durationHours > 0
+                        ? Math.round(session.cost / durationHours)
+                        : 0);
                     const elapsedHours = Math.max(1, Math.ceil(elapsedSeconds / 3600));
                     const extraHours = Math.max(0, elapsedHours - durationHours);
-                    const overdueCost = extraHours * 300;
+                    const overdueCost = extraHours * rate;
 
                     if (overdueCost === 0) {
                       Alert.alert(
                         "Close Booking",
-                        `Spot: ${session.bayNumber} (${session.name})\nElapsed Time: ${formatTimerDigits(elapsedSeconds)}\nBooked Duration: ${durationHours} Hour(s) (Pre-paid)\nTotal Extra Due: 0 RWF\n\nYour session was already paid before booking.`,
+                        `Spot: ${session.bayNumber} (${session.name})\nElapsed Time: ${formatTimerDigits(elapsedSeconds)}\nBooked Duration: ${durationHours} Hour(s)\nTotal Extra Due: 0 RWF\n\nComplete and close this parking session in the database?`,
                         [
                           { text: "Cancel", style: "cancel" },
                           {
                             text: "Close Booking",
                             onPress: async () => {
                               try {
-                                await AsyncStorage.removeItem("@parkzone_active_ticket");
-                                const rawHistory = await AsyncStorage.getItem(PARKING_HISTORY_STORAGE_KEY);
-                                if (rawHistory) {
-                                  const history = JSON.parse(rawHistory);
-                                  const idx = history.findIndex((h: any) => h.id === session.id || h.status === "Active");
-                                  if (idx >= 0) {
-                                    history[idx].status = "Completed";
-                                    await AsyncStorage.setItem(PARKING_HISTORY_STORAGE_KEY, JSON.stringify(history));
-                                  }
-                                }
+                                await completeParkingSession({
+                                  ticketId: session.id,
+                                  paymentMethod: "wallet",
+                                  amount: session.cost || durationHours * rate,
+                                });
                                 onClose();
-                                Alert.alert("Booking Closed", "Parking session finished. Pre-paid booking covered this session in full.");
+                                Alert.alert("Booking Closed", "Parking session completed and saved to the database.");
                               } catch {
                                 onClose();
                               }
@@ -431,8 +505,7 @@ const styles = StyleSheet.create({
   },
   screenHeaderTitle: {
     fontSize: 18,
-    fontWeight: "700",
-    color: "#0F172A",
+    fontWeight: "600",
     textAlign: "center",
   },
   dialCenterWrapper: {
@@ -440,6 +513,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 8,
     marginBottom: 8,
+    position: "relative",
+  },
+  dialGlowAura: {
+    position: "absolute",
+    top: 6,
+    zIndex: 0,
   },
   svgRingContainer: {
     alignItems: "center",
@@ -453,27 +532,22 @@ const styles = StyleSheet.create({
   },
   timerDigitsBold: {
     fontSize: 44,
-    fontWeight: "900",
-    color: "#0F172A",
+    fontWeight: "700",
     letterSpacing: -0.5,
     fontVariant: ["tabular-nums"],
     marginTop: 16,
   },
   timerSubLabel: {
     fontSize: 13.5,
-    fontWeight: "500",
-    color: "#94A3B8",
+    fontWeight: "400",
     marginTop: 4,
   },
   slotScheduleCard: {
     width: "100%",
-    backgroundColor: "#FFFFFF",
     borderRadius: 22,
     borderWidth: 1,
-    borderColor: "#F1F5F9",
     padding: 18,
     marginTop: 16,
-    shadowColor: "#000",
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.05,
     shadowRadius: 14,
@@ -484,8 +558,7 @@ const styles = StyleSheet.create({
   },
   slotTitleText: {
     fontSize: 18,
-    fontWeight: "800",
-    color: "#0F172A",
+    fontWeight: "600",
   },
   timelineRow: {
     flexDirection: "row",
@@ -498,14 +571,12 @@ const styles = StyleSheet.create({
   },
   timelineColLabel: {
     fontSize: 12,
-    fontWeight: "500",
-    color: "#94A3B8",
+    fontWeight: "400",
     marginBottom: 4,
   },
   timelineColTime: {
     fontSize: 15,
-    fontWeight: "800",
-    color: "#0F172A",
+    fontWeight: "600",
   },
   timelineCenterDivider: {
     flex: 1,
@@ -516,12 +587,9 @@ const styles = StyleSheet.create({
   timelineDottedLine: {
     flex: 1,
     height: 1,
-    backgroundColor: "#E2E8F0",
   },
   timelinePill: {
     borderWidth: 1.5,
-    borderColor: "#09090B",
-    backgroundColor: "#FFFFFF",
     borderRadius: 14,
     paddingHorizontal: 12,
     paddingVertical: 4,
@@ -529,8 +597,7 @@ const styles = StyleSheet.create({
   },
   timelinePillText: {
     fontSize: 11,
-    fontWeight: "700",
-    color: "#09090B",
+    fontWeight: "500",
   },
   fineWarningBox: {
     flexDirection: "row",
@@ -546,7 +613,7 @@ const styles = StyleSheet.create({
   fineWarningTitle: {
     color: "#EF4444",
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   fineWarningSub: {
     color: "#F87171",
@@ -567,7 +634,7 @@ const styles = StyleSheet.create({
   },
   findVehicleBtnText: {
     fontSize: 14,
-    fontWeight: "700",
+    fontWeight: "500",
     color: "#09090B",
   },
   bottomActionsRow: {
@@ -588,7 +655,7 @@ const styles = StyleSheet.create({
   extendTimeBtnText: {
     color: "#FFFFFF",
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "600",
   },
   endParkingBtn: {
     flex: 1,
@@ -601,6 +668,6 @@ const styles = StyleSheet.create({
   endParkingBtnText: {
     color: "#FFFFFF",
     fontSize: 15,
-    fontWeight: "700",
+    fontWeight: "600",
   },
 });

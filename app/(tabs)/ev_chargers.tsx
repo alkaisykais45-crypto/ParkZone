@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -20,25 +20,61 @@ import MapView, { Marker, Polyline } from "react-native-maps";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useRouter } from "expo-router";
+import * as Location from "expo-location";
 import { supabase } from "../lib/supabase";
-import { EvChargerTelemetry, fetchEvChargers } from "../services/parking";
+import {
+  DbPaymentMethodRecord,
+  EvChargerTelemetry,
+  fetchAllEvStationsWithChargers,
+  fetchSpotsForLocation,
+  fetchUserPaymentMethods,
+  fetchWalletBalance,
+  issueZeroContactCitation,
+  ParkingSpace,
+  subscribeToEvChargersRealtime,
+  subscribeToSpacesRealtime,
+  updateWalletBalance,
+} from "../services/parking";
 import { Icons } from "../../constants/icons";
 import { useTheme } from "../../hooks/useTheme";
+import { useDriverVehicle } from "../../hooks/useDriverVehicle";
 import { HorizontalUltraRealisticCar } from "../../components/UltraRealisticCar";
+import { AerialParkingLot3D } from "../../components/AerialParkingLot3D";
+import { EvBayDetailModal } from "../../components/EvBayDetailModal";
+import { BayGridSkeleton, EvStationsCarouselSkeleton } from "../../components/SkeletonLoader";
+import {
+  ChargerBayDetails,
+  estimateChargingForVehicle,
+  formatDurationMins,
+  isPlugCompatible,
+} from "../services/evCharging";
 import { MAP_STYLE_LIGHT, MAP_STYLE_DARK } from "../../constants/mapStyles";
+import { fetchRealRoadRoute, LatLng } from "../services/roadRouting";
+import { initiateMobilePayment } from "../services/mobilePayment";
 
 const { width } = Dimensions.get("window");
 
-const KIGALI_REGION = {
+const DEFAULT_REGION = {
   latitude: -1.9536,
   longitude: 30.0606,
   latitudeDelta: 0.05,
   longitudeDelta: 0.05,
 };
 
-const USER_COORDS = {
-  latitude: -1.9575,
-  longitude: 30.0580,
+const haversineKm = (
+  lat1: number,
+  lon1: number,
+  lat2: number,
+  lon2: number
+): number => {
+  const toRad = (v: number) => (v * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
 const getSteppedRoute = (start: { latitude: number; longitude: number }, end: { latitude: number; longitude: number }) => {
@@ -68,221 +104,6 @@ export interface StationItem {
   chargers: EvChargerTelemetry[];
 }
 
-export const FALLBACK_EV_STATIONS: StationItem[] = [
-  {
-    id: "ev-kigali-heights",
-    name: "Kigali Heights EV Superhub",
-    address: "KG 7 Ave, Kimihurura, Kigali",
-    distance: "0.4 km",
-    latitude: -1.9536,
-    longitude: 30.0606,
-    tariff: "250 RWF/kWh",
-    image: "https://images.unsplash.com/photo-1593941707882-a5bba14938c7?auto=format&fit=crop&w=600&q=80",
-    chargers: [
-      {
-        id: "ch-kh-01",
-        location_id: "ev-kigali-heights",
-        station_identifier: "KH-DC-120",
-        connector_type: "CCS2 DC Ultra-Fast",
-        max_output_kw: 120,
-        price_per_kwh: 250,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-      {
-        id: "ch-kh-02",
-        location_id: "ev-kigali-heights",
-        station_identifier: "KH-DC-60",
-        connector_type: "CCS2 DC Fast",
-        max_output_kw: 60,
-        price_per_kwh: 250,
-        status: "charging",
-        current_power_draw_kw: 48.5,
-      },
-      {
-        id: "ch-kh-03",
-        location_id: "ev-kigali-heights",
-        station_identifier: "KH-AC-22",
-        connector_type: "Type 2 AC",
-        max_output_kw: 22,
-        price_per_kwh: 180,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-    ],
-  },
-  {
-    id: "ev-cbd-boulevard",
-    name: "KN 4 Ave CBD Boulevard Hub",
-    address: "KN 4 Ave, Nyarugenge, Kigali",
-    distance: "1.2 km",
-    latitude: -1.9482,
-    longitude: 30.0588,
-    tariff: "260 RWF/kWh",
-    image: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=600&q=80",
-    chargers: [
-      {
-        id: "ch-cbd-01",
-        location_id: "ev-cbd-boulevard",
-        station_identifier: "CBD-DC-150",
-        connector_type: "CCS2 DC Ultra-Fast",
-        max_output_kw: 150,
-        price_per_kwh: 260,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-      {
-        id: "ch-cbd-02",
-        location_id: "ev-cbd-boulevard",
-        station_identifier: "CBD-AC-22",
-        connector_type: "Type 2 AC",
-        max_output_kw: 22,
-        price_per_kwh: 180,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-    ],
-  },
-  {
-    id: "ev-kimihurura",
-    name: "Kimihurura Culture Hub",
-    address: "KG 674 St, Kimihurura, Kigali",
-    distance: "1.8 km",
-    latitude: -1.9589,
-    longitude: 30.0762,
-    tariff: "240 RWF/kWh",
-    image: "https://images.unsplash.com/photo-1558441719-8b489c63f7bc?auto=format&fit=crop&w=600&q=80",
-    chargers: [
-      {
-        id: "ch-kmh-01",
-        location_id: "ev-kimihurura",
-        station_identifier: "KMH-DC-90",
-        connector_type: "Dual CCS2 Fast",
-        max_output_kw: 90,
-        price_per_kwh: 240,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-      {
-        id: "ch-kmh-02",
-        location_id: "ev-kimihurura",
-        station_identifier: "KMH-AC-22",
-        connector_type: "Type 2 AC",
-        max_output_kw: 22,
-        price_per_kwh: 180,
-        status: "charging",
-        current_power_draw_kw: 19.2,
-      },
-    ],
-  },
-  {
-    id: "ev-jumeirah",
-    name: "Jumeirah / Al Wasl Hub",
-    address: "Al Wasl Rd 56, Gasabo, Kigali",
-    distance: "2.3 km",
-    latitude: -1.9441,
-    longitude: 30.0619,
-    tariff: "250 RWF/kWh",
-    image: "https://images.unsplash.com/photo-1617788138017-80ad40651399?auto=format&fit=crop&w=600&q=80",
-    chargers: [
-      {
-        id: "ch-jum-01",
-        location_id: "ev-jumeirah",
-        station_identifier: "JUM-DC-60",
-        connector_type: "CCS2 DC Fast",
-        max_output_kw: 60,
-        price_per_kwh: 250,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-      {
-        id: "ch-jum-02",
-        location_id: "ev-jumeirah",
-        station_identifier: "JUM-AC-22",
-        connector_type: "Type 2 AC",
-        max_output_kw: 22,
-        price_per_kwh: 180,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-    ],
-  },
-  {
-    id: "ev-chuk",
-    name: "CHUK Medical Concession Hub",
-    address: "KN 1 Rd, Kiyovu, Kigali",
-    distance: "2.7 km",
-    latitude: -1.9512,
-    longitude: 30.0581,
-    tariff: "220 RWF/kWh",
-    image: "https://images.unsplash.com/photo-1620896727255-a2f0bfbc05f0?auto=format&fit=crop&w=600&q=80",
-    chargers: [
-      {
-        id: "ch-chuk-01",
-        location_id: "ev-chuk",
-        station_identifier: "CHUK-DC-80",
-        connector_type: "CCS2 DC Fast",
-        max_output_kw: 80,
-        price_per_kwh: 220,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-      {
-        id: "ch-chuk-02",
-        location_id: "ev-chuk",
-        station_identifier: "CHUK-AC-22",
-        connector_type: "Type 2 AC",
-        max_output_kw: 22,
-        price_per_kwh: 160,
-        status: "charging",
-        current_power_draw_kw: 17.0,
-      },
-    ],
-  },
-  {
-    id: "ev-bk-arena",
-    name: "BK Arena Sports Mega Hub",
-    address: "KG 17 Ave, Remera, Kigali",
-    distance: "3.5 km",
-    latitude: -1.9553,
-    longitude: 30.113,
-    tariff: "250 RWF/kWh",
-    image: "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=600&q=80",
-    chargers: [
-      {
-        id: "ch-bka-01",
-        location_id: "ev-bk-arena",
-        station_identifier: "BKA-DC-150",
-        connector_type: "CCS2 DC Ultra-Fast",
-        max_output_kw: 150,
-        price_per_kwh: 250,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-      {
-        id: "ch-bka-02",
-        location_id: "ev-bk-arena",
-        station_identifier: "BKA-DC-100",
-        connector_type: "CCS2 DC Fast",
-        max_output_kw: 100,
-        price_per_kwh: 250,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-      {
-        id: "ch-bka-03",
-        location_id: "ev-bk-arena",
-        station_identifier: "BKA-AC-22",
-        connector_type: "Type 2 AC",
-        max_output_kw: 22,
-        price_per_kwh: 180,
-        status: "available",
-        current_power_draw_kw: 0.0,
-      },
-    ],
-  },
-];
-
 export interface ParkingLotSpot {
   id: string;
   bayNumber: string;
@@ -291,117 +112,6 @@ export interface ParkingLotSpot {
   spotType?: string;
 }
 
-export const ZONE_PARKING_LOTS: Record<
-  string,
-  {
-    title: string;
-    description: string;
-    leftColumn: ParkingLotSpot[];
-    rightColumn: ParkingLotSpot[];
-  }
-> = {
-  "Zone A": {
-    title: "Executive & Ultra-Fast Hub",
-    description: "Front-row bays equipped with 150 kW DC hyperchargers",
-    leftColumn: [
-      { id: "A-101", bayNumber: "101", isOccupied: false, spotType: "150kW DC" },
-      { id: "A-102", bayNumber: "102", isOccupied: true, carColor: "crimson" },
-      { id: "A-103", bayNumber: "103", isOccupied: false, spotType: "150kW DC" },
-      { id: "A-104", bayNumber: "104", isOccupied: false, spotType: "150kW DC" },
-      { id: "A-105", bayNumber: "105", isOccupied: false, spotType: "150kW DC" },
-      { id: "A-106", bayNumber: "106", isOccupied: true, carColor: "pearl" },
-    ],
-    rightColumn: [
-      { id: "A-107", bayNumber: "107", isOccupied: true, carColor: "sapphire" },
-      { id: "A-108", bayNumber: "108", isOccupied: false, spotType: "150kW DC" },
-      { id: "A-109", bayNumber: "109", isOccupied: false, spotType: "150kW DC" },
-      { id: "A-110", bayNumber: "110", isOccupied: true, carColor: "amber" },
-      { id: "A-111", bayNumber: "111", isOccupied: false, spotType: "150kW DC" },
-      { id: "A-112", bayNumber: "112", isOccupied: true, carColor: "emerald" },
-    ],
-  },
-  "Zone B": {
-    title: "Level 1 Covered Bays",
-    description: "Weather-protected garage bays with 50 kW fast plugs",
-    leftColumn: [
-      { id: "B-201", bayNumber: "201", isOccupied: true, carColor: "silver" },
-      { id: "B-202", bayNumber: "202", isOccupied: false, spotType: "Covered 50kW" },
-      { id: "B-203", bayNumber: "203", isOccupied: false, spotType: "Covered 50kW" },
-      { id: "B-204", bayNumber: "204", isOccupied: true, carColor: "carbon" },
-      { id: "B-205", bayNumber: "205", isOccupied: false, spotType: "Covered 50kW" },
-      { id: "B-206", bayNumber: "206", isOccupied: false, spotType: "Covered 50kW" },
-    ],
-    rightColumn: [
-      { id: "B-207", bayNumber: "207", isOccupied: false, spotType: "Covered 50kW" },
-      { id: "B-208", bayNumber: "208", isOccupied: true, carColor: "champagne" },
-      { id: "B-209", bayNumber: "209", isOccupied: false, spotType: "Covered 50kW" },
-      { id: "B-210", bayNumber: "210", isOccupied: true, carColor: "obsidian" },
-      { id: "B-211", bayNumber: "211", isOccupied: false, spotType: "Covered 50kW" },
-      { id: "B-212", bayNumber: "212", isOccupied: false, spotType: "Covered 50kW" },
-    ],
-  },
-  "Zone C": {
-    title: "Central Plaza Charging Lot",
-    description: "Main parking court with 22 kW AC stations & wide lanes",
-    leftColumn: [
-      { id: "C-123", bayNumber: "123", isOccupied: false, spotType: "22kW AC" },
-      { id: "C-124", bayNumber: "124", isOccupied: true, carColor: "obsidian" },
-      { id: "C-125", bayNumber: "125", isOccupied: false, spotType: "22kW AC" },
-      { id: "C-126", bayNumber: "126", isOccupied: false, spotType: "22kW AC" },
-      { id: "C-127", bayNumber: "127", isOccupied: false, spotType: "22kW AC" },
-      { id: "C-128", bayNumber: "128", isOccupied: false, spotType: "22kW AC" },
-    ],
-    rightColumn: [
-      { id: "C-129", bayNumber: "129", isOccupied: true, carColor: "titanium" },
-      { id: "C-130", bayNumber: "130", isOccupied: true, carColor: "crimson" },
-      { id: "C-131", bayNumber: "131", isOccupied: false, spotType: "22kW AC" },
-      { id: "C-132", bayNumber: "132", isOccupied: false, spotType: "22kW AC" },
-      { id: "C-133", bayNumber: "133", isOccupied: true, carColor: "glacier" },
-      { id: "C-134", bayNumber: "134", isOccupied: false, spotType: "22kW AC" },
-    ],
-  },
-  "Zone D": {
-    title: "East Deck Fleet & SUV Stalls",
-    description: "Oversized parking spaces designed for large SUVs & trucks",
-    leftColumn: [
-      { id: "D-401", bayNumber: "401", isOccupied: false, spotType: "Wide Stall" },
-      { id: "D-402", bayNumber: "402", isOccupied: true, carColor: "emerald" },
-      { id: "D-403", bayNumber: "403", isOccupied: true, carColor: "sapphire" },
-      { id: "D-404", bayNumber: "404", isOccupied: false, spotType: "Wide Stall" },
-      { id: "D-405", bayNumber: "405", isOccupied: false, spotType: "Wide Stall" },
-      { id: "D-406", bayNumber: "406", isOccupied: true, carColor: "amber" },
-    ],
-    rightColumn: [
-      { id: "D-407", bayNumber: "407", isOccupied: false, spotType: "Wide Stall" },
-      { id: "D-408", bayNumber: "408", isOccupied: false, spotType: "Wide Stall" },
-      { id: "D-409", bayNumber: "409", isOccupied: true, carColor: "pearl" },
-      { id: "D-410", bayNumber: "410", isOccupied: false, spotType: "Wide Stall" },
-      { id: "D-411", bayNumber: "411", isOccupied: true, carColor: "silver" },
-      { id: "D-412", bayNumber: "412", isOccupied: false, spotType: "Wide Stall" },
-    ],
-  },
-  "Zone E": {
-    title: "Rooftop Solar Deck",
-    description: "Scenic rooftop spots powered by on-site solar canopies",
-    leftColumn: [
-      { id: "E-501", bayNumber: "501", isOccupied: true, carColor: "crimson" },
-      { id: "E-502", bayNumber: "502", isOccupied: true, carColor: "champagne" },
-      { id: "E-503", bayNumber: "503", isOccupied: false, spotType: "Solar Canopy" },
-      { id: "E-504", bayNumber: "504", isOccupied: false, spotType: "Solar Canopy" },
-      { id: "E-505", bayNumber: "505", isOccupied: true, carColor: "titanium" },
-      { id: "E-506", bayNumber: "506", isOccupied: false, spotType: "Solar Canopy" },
-    ],
-    rightColumn: [
-      { id: "E-507", bayNumber: "507", isOccupied: false, spotType: "Solar Canopy" },
-      { id: "E-508", bayNumber: "508", isOccupied: true, carColor: "sapphire" },
-      { id: "E-509", bayNumber: "509", isOccupied: false, spotType: "Solar Canopy" },
-      { id: "E-510", bayNumber: "510", isOccupied: false, spotType: "Solar Canopy" },
-      { id: "E-511", bayNumber: "511", isOccupied: true, carColor: "carbon" },
-      { id: "E-512", bayNumber: "512", isOccupied: false, spotType: "Solar Canopy" },
-    ],
-  },
-};
-
 type LayoutMode = "grid" | "map" | "list";
 
 const EVChargers = () => {
@@ -409,98 +119,230 @@ const EVChargers = () => {
   const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const router = useRouter();
+  const { vehicle: driverVehicle } = useDriverVehicle();
 
-  const [stations, setStations] = useState<StationItem[]>(FALLBACK_EV_STATIONS);
+  const [userCoords, setUserCoords] = useState({
+    latitude: DEFAULT_REGION.latitude,
+    longitude: DEFAULT_REGION.longitude,
+  });
+  const [stations, setStations] = useState<StationItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState<"all" | "fast" | "ac">("all");
   const [activeCategory, setActiveCategory] = useState<string>("car");
   const [bookmarked, setBookmarked] = useState<Record<string, boolean>>({});
   const [layoutMode, setLayoutMode] = useState<LayoutMode>("map");
-  const [selectedStation, setSelectedStation] = useState<StationItem | null>(FALLBACK_EV_STATIONS[0] || null);
+  const [selectedStation, setSelectedStation] = useState<StationItem | null>(null);
+  const [activeRouteCoords, setActiveRouteCoords] = useState<LatLng[]>([]);
+  const [activeRouteDistanceKm, setActiveRouteDistanceKm] = useState<number>(0);
+  const [activeRouteDurationMin, setActiveRouteDurationMin] = useState<number>(0);
 
-  // BottomSheet and Charging Spot Selection State (matching user screenshot)
+  useEffect(() => {
+    let isCancelled = false;
+    if (selectedStation && userCoords) {
+      const dest = {
+        latitude: Number(selectedStation.latitude),
+        longitude: Number(selectedStation.longitude),
+      };
+      fetchRealRoadRoute(userCoords, dest).then((res) => {
+        if (!isCancelled) {
+          setActiveRouteCoords(res.coordinates);
+          setActiveRouteDistanceKm(res.distanceKm);
+          setActiveRouteDurationMin(res.durationMinutes);
+        }
+      });
+    } else {
+      setActiveRouteCoords([]);
+      setActiveRouteDistanceKm(0);
+      setActiveRouteDurationMin(0);
+    }
+    return () => {
+      isCancelled = true;
+    };
+  }, [selectedStation, userCoords]);
+
+  // BottomSheet and Charging Spot Selection State (driven by database)
   const [sheetStation, setSheetStation] = useState<StationItem | null>(null);
-  const [selectedZone, setSelectedZone] = useState("Zone C");
-  const [selectedBay, setSelectedBay] = useState("127");
+  const [sheetSpaces, setSheetSpaces] = useState<ParkingSpace[]>([]);
+  const [loadingSpaces, setLoadingSpaces] = useState(false);
+  const [selectedZone, setSelectedZone] = useState<string>("");
+  const [selectedBay, setSelectedBay] = useState<string>("");
   const [confirmModalVisible, setConfirmModalVisible] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<DbPaymentMethodRecord[]>([]);
+
+  // EV Slot Aerial view toggle & Inspection Modal
+  const [is3DView, setIs3DView] = useState(false);
+  const [inspectedSpace, setInspectedSpace] = useState<ParkingSpace | null>(null);
 
   const mapRef = useRef<MapView>(null);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === "granted") {
+          let coords = (await Location.getLastKnownPositionAsync())?.coords || null;
+          if (!coords) {
+            try {
+              const loc = await Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+              });
+              coords = loc?.coords || null;
+            } catch {
+              // Simulator/GPS unavailable — keep default coordinates
+            }
+          }
+          if (coords) {
+            setUserCoords({
+              latitude: coords.latitude,
+              longitude: coords.longitude,
+            });
+          }
+        }
+      } catch {}
+    })();
+    fetchUserPaymentMethods().then(setPaymentMethods).catch(() => {});
+  }, []);
+
+  // Load real bays from Supabase whenever sheetStation changes
+  useEffect(() => {
+    if (!sheetStation?.id) {
+      setSheetSpaces([]);
+      return;
+    }
+    let mounted = true;
+    setLoadingSpaces(true);
+    fetchSpotsForLocation(sheetStation.id)
+      .then((spots) => {
+        if (!mounted) return;
+        setSheetSpaces(spots);
+        const zones = Array.from(new Set(spots.map((s) => s.zone_code || "EV Hub")));
+        const firstZone = zones[0] || "";
+        setSelectedZone(firstZone);
+        const firstFree = spots.find(
+          (s) => !s.is_occupied && (!firstZone || (s.zone_code || "EV Hub") === firstZone)
+        );
+        setSelectedBay(firstFree?.space_number || spots[0]?.space_number || "");
+      })
+      .finally(() => {
+        if (mounted) setLoadingSpaces(false);
+      });
+
+    const unsub = subscribeToSpacesRealtime(sheetStation.id, (updated) => {
+      setSheetSpaces((prev) =>
+        prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s))
+      );
+    });
+    return () => {
+      mounted = false;
+      unsub();
+    };
+  }, [sheetStation?.id]);
+
+  const availableZones = useMemo(() => {
+    const zones = Array.from(new Set(sheetSpaces.map((s) => s.zone_code || "EV Hub")));
+    return zones;
+  }, [sheetSpaces]);
+
   const handleSelectZone = (zone: string) => {
     setSelectedZone(zone);
-    const lot = ZONE_PARKING_LOTS[zone];
-    if (lot) {
-      const firstAvailable =
-        lot.leftColumn.find((s) => !s.isOccupied) ||
-        lot.rightColumn.find((s) => !s.isOccupied);
-      if (firstAvailable) {
-        setSelectedBay(firstAvailable.bayNumber);
-      }
+    const inZone = sheetSpaces.filter((s) => (s.zone_code || "EV Hub") === zone);
+    const firstAvailable = inZone.find((s) => !s.is_occupied);
+    if (firstAvailable) {
+      setSelectedBay(firstAvailable.space_number);
+    } else if (inZone[0]) {
+      setSelectedBay(inZone[0].space_number);
     }
   };
 
-  const currentLot = ZONE_PARKING_LOTS[selectedZone] || ZONE_PARKING_LOTS["Zone C"];
+  const currentLot = useMemo(() => {
+    const filtered = selectedZone
+      ? sheetSpaces.filter((s) => (s.zone_code || "EV Hub") === selectedZone)
+      : sheetSpaces;
+    const mapped: ParkingLotSpot[] = filtered.map((s) => ({
+      id: s.id,
+      bayNumber: s.space_number,
+      isOccupied: s.is_occupied,
+      carColor: "obsidian",
+      spotType: s.watt_power_kw ? `${s.watt_power_kw}kW` : s.space_type === "ev" ? "EV Charger" : "Bay",
+    }));
+    const mid = Math.ceil(mapped.length / 2);
+    return {
+      title: selectedZone || sheetStation?.name || "Charging Zone",
+      description:
+        mapped.length > 0
+          ? `${mapped.filter((m) => !m.isOccupied).length} of ${mapped.length} bays available in database`
+          : "No bays configured for this station yet",
+      leftColumn: mapped.slice(0, mid),
+      rightColumn: mapped.slice(mid),
+    };
+  }, [sheetSpaces, selectedZone, sheetStation?.name]);
 
   const [refreshing, setRefreshing] = useState(false);
 
+  const loadChargers = useCallback(async () => {
+    setLoading(true);
+    try {
+      const dbStations = await fetchAllEvStationsWithChargers();
+      const withDistances: StationItem[] = dbStations.map((st) => {
+        const km = haversineKm(
+          userCoords.latitude,
+          userCoords.longitude,
+          st.latitude,
+          st.longitude
+        );
+        return {
+          ...st,
+          distance: `${km.toFixed(1)} km`,
+        };
+      });
+      setStations(withDistances);
+      setSelectedStation((prev) => {
+        if (prev && withDistances.some((s) => s.id === prev.id)) {
+          return withDistances.find((s) => s.id === prev.id) || null;
+        }
+        return withDistances[0] || null;
+      });
+    } catch (e) {
+      console.warn("loadChargers error:", e);
+      setStations([]);
+      setSelectedStation(null);
+    } finally {
+      setLoading(false);
+    }
+  }, [userCoords.latitude, userCoords.longitude]);
+
   useEffect(() => {
     loadChargers();
-  }, []);
+  }, [loadChargers]);
+
+  // Real-time Cloud Subscription for EV Charger Hardware Telemetry & Working Status
+  useEffect(() => {
+    if (!selectedStation?.id) return;
+    const unsubscribe = subscribeToEvChargersRealtime(selectedStation.id, (updatedCharger) => {
+      setStations((prev) =>
+        prev.map((st) => {
+          if (st.id === updatedCharger.location_id) {
+            return {
+              ...st,
+              chargers: st.chargers.map((c) =>
+                c.id === updatedCharger.id ? { ...c, ...updatedCharger } : c
+              ),
+            };
+          }
+          return st;
+        })
+      );
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, [selectedStation?.id]);
 
   const onRefresh = async () => {
     setRefreshing(true);
     await loadChargers();
     setRefreshing(false);
-  };
-
-  const loadChargers = async () => {
-    setLoading(true);
-    try {
-      const { data: locs, error } = await supabase
-        .from("parking_locations")
-        .select("id, name, address, latitude, longitude")
-        .eq("is_active", true);
-
-      if (locs && locs.length > 0) {
-        const loadedStations: StationItem[] = [];
-        for (const loc of locs) {
-          const chargers = await fetchEvChargers(loc.id);
-          if (chargers.length > 0) {
-            loadedStations.push({
-              id: loc.id,
-              name: loc.name,
-              address: loc.address,
-              distance: "0.8 km",
-              latitude: Number(loc.latitude) || -1.9536,
-              longitude: Number(loc.longitude) || 30.0606,
-              tariff: "250 RWF/kWh",
-              chargers,
-            });
-          }
-        }
-
-        // Merge with full fallback EV Superhubs so all stations across Kigali are always visible
-        const mergedMap = new Map<string, StationItem>();
-        FALLBACK_EV_STATIONS.forEach((st) => mergedMap.set(st.name.toLowerCase(), st));
-        loadedStations.forEach((st) => mergedMap.set(st.name.toLowerCase(), st));
-
-        const finalStations = Array.from(mergedMap.values());
-        setStations(finalStations);
-        if (finalStations.length > 0) {
-          setSelectedStation(finalStations[0]);
-        }
-      } else {
-        setStations(FALLBACK_EV_STATIONS);
-        setSelectedStation(FALLBACK_EV_STATIONS[0]);
-      }
-    } catch (e) {
-      console.warn("loadChargers error:", e);
-      setStations(FALLBACK_EV_STATIONS);
-      setSelectedStation(FALLBACK_EV_STATIONS[0]);
-    } finally {
-      setLoading(false);
-    }
   };
 
   const filteredStations = stations.filter((st) => {
@@ -530,7 +372,7 @@ const EVChargers = () => {
 
     Alert.alert(
       "Reserve EV Charger",
-      `Station: ${stationName}\nPlug: ${charger.station_identifier} (${charger.connector_type})\nOutput: ${charger.max_output_kw} kW\nTariff: ${charger.price_per_kwh} RWF / kWh\n\n15-minute arrival hold will be activated.`,
+      `Station: ${stationName}\nPlug: ${charger.station_identifier} (${charger.connector_type})\nOutput: ${charger.max_output_kw} kW\nCharging Tariff: 9,000 RWF (<30 min) • 10,000 RWF (≥30 min / Full)\nParking Fee: 0 RWF (Separated from Parking)\n\n15-minute arrival hold will be activated.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -547,10 +389,10 @@ const EVChargers = () => {
     setSelectedStation(station);
     mapRef.current?.animateToRegion(
       {
-        latitude: (USER_COORDS.latitude + station.latitude) / 2,
-        longitude: (USER_COORDS.longitude + station.longitude) / 2,
-        latitudeDelta: Math.max(Math.abs(USER_COORDS.latitude - station.latitude) * 2.4, 0.035),
-        longitudeDelta: Math.max(Math.abs(USER_COORDS.longitude - station.longitude) * 2.4, 0.035),
+        latitude: (userCoords.latitude + station.latitude) / 2,
+        longitude: (userCoords.longitude + station.longitude) / 2,
+        latitudeDelta: Math.max(Math.abs(userCoords.latitude - station.latitude) * 2.4, 0.035),
+        longitudeDelta: Math.max(Math.abs(userCoords.longitude - station.longitude) * 2.4, 0.035),
       },
       450
     );
@@ -577,12 +419,12 @@ const EVChargers = () => {
         <MapView
           ref={mapRef}
           style={StyleSheet.absoluteFillObject}
-          initialRegion={KIGALI_REGION}
+          initialRegion={DEFAULT_REGION}
           showsUserLocation={false}
           customMapStyle={theme.isDark ? MAP_STYLE_DARK : MAP_STYLE_LIGHT}
         >
           {/* User Location Radar Marker in App Colors */}
-          <Marker coordinate={USER_COORDS} anchor={{ x: 0.5, y: 0.5 }}>
+          <Marker coordinate={userCoords} anchor={{ x: 0.5, y: 0.5 }}>
             <View
               style={[
                 styles.radarOuterCircle,
@@ -612,22 +454,66 @@ const EVChargers = () => {
             </View>
           </Marker>
 
-          {/* Stepped Route to Selected Station in App Colors */}
-          {selectedStation && (
+          {/* Real Road Route to Selected Station (Actual Streets & Turns) */}
+          {selectedStation && activeRouteCoords.length > 0 && (
             <>
+              {/* Outer shadow/glow stroke */}
               <Polyline
-                coordinates={getSteppedRoute(USER_COORDS, {
-                  latitude: selectedStation.latitude,
-                  longitude: selectedStation.longitude,
-                })}
-                strokeColor={theme.isDark ? "#FFFFFF" : "#09090B"}
-                strokeWidth={4.5}
+                coordinates={activeRouteCoords}
+                strokeColor={theme.isDark ? "rgba(16, 185, 129, 0.28)" : "rgba(16, 185, 129, 0.2)"}
+                strokeWidth={7}
+                lineCap="round"
+                lineJoin="round"
+              />
+              {/* Inner road route stroke in EV Emerald Green */}
+              <Polyline
+                coordinates={activeRouteCoords}
+                strokeColor={theme.evGreen}
+                strokeWidth={4.2}
                 lineCap="round"
                 lineJoin="round"
               />
 
+              {/* Distance & Driving Duration Badge at Road Midpoint */}
+              <Marker
+                coordinate={
+                  activeRouteCoords[Math.floor(activeRouteCoords.length / 2)] || {
+                    latitude: (userCoords.latitude + selectedStation.latitude) / 2,
+                    longitude: (userCoords.longitude + selectedStation.longitude) / 2,
+                  }
+                }
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View
+                  style={{
+                    backgroundColor: theme.isDark ? "#18181B" : "#09090B",
+                    borderColor: theme.evGreenBorder,
+                    borderWidth: 1,
+                    paddingHorizontal: 8,
+                    paddingVertical: 3,
+                    borderRadius: 10,
+                    shadowColor: "#000",
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.25,
+                    shadowRadius: 4,
+                    elevation: 5,
+                  }}
+                >
+                  <Text style={{ fontSize: 11, fontWeight: "700", color: "#FFFFFF" }}>
+                    {(activeRouteDistanceKm || haversineKm(
+                      userCoords.latitude,
+                      userCoords.longitude,
+                      selectedStation.latitude,
+                      selectedStation.longitude
+                    )).toFixed(1)}{" "}
+                    km
+                    {activeRouteDurationMin > 0 ? ` • ${activeRouteDurationMin}m` : ""}
+                  </Text>
+                </View>
+              </Marker>
+
               {/* Start / Origin Marker (black circle with inner white dot) */}
-              <Marker coordinate={USER_COORDS} anchor={{ x: 0.5, y: 0.5 }}>
+              <Marker coordinate={userCoords} anchor={{ x: 0.5, y: 0.5 }}>
                 <View style={styles.originMarkerBadge}>
                   <View style={[styles.originMarkerOuter, { backgroundColor: theme.isDark ? "#FFFFFF" : "#09090B" }]}>
                     <View style={[styles.originMarkerInner, { backgroundColor: theme.isDark ? "#09090B" : "#FFFFFF" }]} />
@@ -635,7 +521,7 @@ const EVChargers = () => {
                 </View>
               </Marker>
 
-              {/* Destination Marker (circular halo with black navigation chevron badge) */}
+              {/* Destination Marker (circular halo with green EV navigation chevron badge) */}
               <Marker
                 coordinate={{
                   latitude: selectedStation.latitude,
@@ -648,20 +534,20 @@ const EVChargers = () => {
                     style={[
                       styles.destMarkerHaloCircle,
                       {
-                        backgroundColor: theme.isDark ? "rgba(255, 255, 255, 0.2)" : "rgba(9, 9, 11, 0.15)",
+                        backgroundColor: "rgba(16, 185, 129, 0.22)",
                       },
                     ]}
                   >
                     <View
                       style={[
                         styles.destMarkerInnerCircle,
-                        { backgroundColor: theme.isDark ? "#FFFFFF" : "#09090B" },
+                        { backgroundColor: theme.evGreen },
                       ]}
                     >
                       <Ionicons
                         name="navigate"
                         size={14}
-                        color={theme.isDark ? "#09090B" : "#FFFFFF"}
+                        color="#FFFFFF"
                       />
                     </View>
                   </View>
@@ -670,7 +556,7 @@ const EVChargers = () => {
             </>
           )}
 
-          {/* EV Station Badges (Black circle with EV pump/bolt icon & anchor dot beneath) */}
+          {/* EV Station Badges (Black & Green EV pump/bolt icon & anchor dot beneath) */}
           {filteredStations.map((st) => {
             const isSelected = selectedStation?.id === st.id;
 
@@ -687,24 +573,24 @@ const EVChargers = () => {
                       styles.evPinBadge,
                       {
                         backgroundColor: isSelected
-                          ? "#10B981"
-                          : theme.isDark
-                          ? "#18181B"
+                          ? theme.evGreen
                           : "#09090B",
-                        borderColor: theme.surface,
+                        borderColor: isSelected ? "#FFFFFF" : theme.evGreenBorder,
                       },
                     ]}
                   >
-                    <MaterialCommunityIcons name="ev-station" size={17} color="#FFFFFF" />
+                    <MaterialCommunityIcons
+                      name="ev-station"
+                      size={17}
+                      color={isSelected ? "#FFFFFF" : theme.evGreen}
+                    />
                   </View>
                   <View
                     style={[
                       styles.evPinStemDot,
                       {
                         backgroundColor: isSelected
-                          ? "#10B981"
-                          : theme.isDark
-                          ? "#FFFFFF"
+                          ? theme.evGreen
                           : "#09090B",
                       },
                     ]}
@@ -747,7 +633,7 @@ const EVChargers = () => {
           <Ionicons name="location-outline" size={18} color={theme.text} />
           <TextInput
             style={[styles.topSearchCapsuleInput, { color: theme.text }]}
-            placeholder="San Francisco, CA"
+            placeholder="Search EV charging stations..."
             placeholderTextColor={theme.textMuted}
             value={searchQuery}
             onChangeText={setSearchQuery}
@@ -757,7 +643,7 @@ const EVChargers = () => {
             onPress={() => {
               mapRef.current?.animateToRegion(
                 {
-                  ...USER_COORDS,
+                  ...userCoords,
                   latitudeDelta: 0.02,
                   longitudeDelta: 0.02,
                 },
@@ -784,6 +670,29 @@ const EVChargers = () => {
           Nearby Station
         </Text>
 
+        {loading ? (
+          <EvStationsCarouselSkeleton />
+        ) : filteredStations.length === 0 ? (
+          <View
+            style={{
+              marginHorizontal: 20,
+              padding: 18,
+              borderRadius: 18,
+              backgroundColor: theme.surface,
+              borderWidth: 1,
+              borderColor: theme.border,
+              alignItems: "center",
+            }}
+          >
+            <MaterialCommunityIcons name="ev-station" size={26} color={theme.textSecondary} />
+            <Text style={{ fontSize: 14, fontWeight: "600", color: theme.text, marginTop: 6 }}>
+              No EV stations found in database
+            </Text>
+            <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 2, textAlign: "center" }}>
+              Add EV charging locations and chargers to view live telemetry.
+            </Text>
+          </View>
+        ) : (
         <FlatList
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -802,9 +711,7 @@ const EVChargers = () => {
                     width: width * 0.82,
                     backgroundColor: theme.surface,
                     borderColor: isSelected
-                      ? theme.isDark
-                        ? "#FFFFFF"
-                        : "#09090B"
+                      ? theme.evGreen
                       : theme.border,
                     borderWidth: isSelected ? 1.8 : 1,
                     shadowColor: theme.cardShadow,
@@ -814,14 +721,24 @@ const EVChargers = () => {
                 activeOpacity={0.88}
               >
                 {/* Station Thumbnail Image */}
-                <Image
-                  source={{
-                    uri:
-                      item.image ||
-                      "https://images.unsplash.com/photo-1593941707882-a5bba14938c7?auto=format&fit=crop&w=400&q=80",
-                  }}
-                  style={styles.nearbyThumbImg}
-                />
+                {item.image ? (
+                  <Image source={{ uri: item.image }} style={styles.nearbyThumbImg} />
+                ) : (
+                  <View
+                    style={[
+                      styles.nearbyThumbImg,
+                      {
+                        backgroundColor: theme.evGreenSoft,
+                        borderWidth: 1,
+                        borderColor: theme.evGreenBorder,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      },
+                    ]}
+                  >
+                    <MaterialCommunityIcons name="ev-station" size={32} color={theme.evGreen} />
+                  </View>
+                )}
 
                 {/* Right Info Column */}
                 <View style={styles.nearbyInfoCol}>
@@ -835,18 +752,57 @@ const EVChargers = () => {
                         Distance
                       </Text>
                       <Text style={[styles.metricValText, { color: theme.text }]}>
-                        {item.distance || "0.4 mi"}
+                        {item.distance || "-"}
                       </Text>
                     </View>
 
                     <View style={styles.metricItemCol}>
                       <Text style={[styles.metricLabelText, { color: theme.textSecondary }]}>
-                        Rate
+                        Power
                       </Text>
-                      <Text style={[styles.metricValText, { color: theme.text }]}>
-                        {item.tariff ? item.tariff.replace(" RWF/kWh", " RWF/kWh") : "$0.41 p/kwh"}
+                      <Text style={[styles.metricValText, { color: theme.evGreen }]}>
+                        {item.chargers[0]?.max_output_kw || 0} kW
                       </Text>
                     </View>
+
+                    <View style={styles.metricItemCol}>
+                      <Text style={[styles.metricLabelText, { color: theme.textSecondary }]}>
+                        Charge Rate
+                      </Text>
+                      <Text style={[styles.metricValText, { color: theme.evGreen }]}>
+                        {item.tariff || "9k–10k RWF"}
+                      </Text>
+                    </View>
+                  </View>
+
+                  {/* Realtime API & Hardware Working Status Badge */}
+                  <View style={styles.cardHardwareStatusRow}>
+                    <View
+                      style={[
+                        styles.hardwareStatusDot,
+                        {
+                          backgroundColor: item.chargers.some((c) => c.operational_status === "faulted")
+                            ? theme.danger
+                            : theme.evGreen,
+                        },
+                      ]}
+                    />
+                    <Text
+                      style={[
+                        styles.hardwareStatusText,
+                        {
+                          color: item.chargers.some((c) => c.operational_status === "faulted")
+                            ? theme.danger
+                            : theme.evGreen,
+                        },
+                      ]}
+                    >
+                      {item.chargers.some(c => c.operational_status === "faulted")
+                        ? "Faulted (Offline)"
+                        : item.chargers.length > 0
+                        ? `Working • ${item.chargers[0]?.api_provider || "OCPP 2.0.1"}`
+                        : "Station Active"}
+                    </Text>
                   </View>
 
                   {/* Black Pill Button: Map Direction */}
@@ -877,6 +833,7 @@ const EVChargers = () => {
             );
           }}
         />
+        )}
       </View>
 
       {/* BottomSheet Modal for Location Charging Spots (matching user screenshot) */}
@@ -906,9 +863,15 @@ const EVChargers = () => {
             {/* Header: Title, Address, and Circular Close Button ( X ) */}
             <View style={styles.sheetHeaderRow}>
               <View style={{ flex: 1, marginRight: 12 }}>
-                <Text style={[styles.sheetStationTitle, { color: theme.text }]} numberOfLines={1}>
-                  {sheetStation?.name || "EV Charging Station"}
-                </Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Text style={[styles.sheetStationTitle, { color: theme.text }]} numberOfLines={1}>
+                    {sheetStation?.name || "EV Charging Station"}
+                  </Text>
+                  <View style={[styles.liveFeedBadge, { backgroundColor: theme.evGreenSoft, borderColor: theme.evGreenBorder }]}>
+                    <View style={[styles.liveDot, { backgroundColor: theme.evGreen }]} />
+                    <Text style={[styles.liveFeedText, { color: theme.evGreen }]}>LIVE OCPP</Text>
+                  </View>
+                </View>
                 <Text style={[styles.sheetStationAddress, { color: theme.textSecondary }]} numberOfLines={1}>
                   {sheetStation?.address || "Kigali, Rwanda"}
                 </Text>
@@ -926,53 +889,121 @@ const EVChargers = () => {
               </TouchableOpacity>
             </View>
 
-            {/* Horizontal Zone Selector Pills: Zone A, Zone B, Zone C, Zone D, Zone E */}
-            <View style={styles.zonePillsWrapper}>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.zonePillsContainer}>
-                {["Zone A", "Zone B", "Zone C", "Zone D", "Zone E"].map((zone) => {
-                  const isActive = selectedZone === zone;
-                  return (
-                    <TouchableOpacity
-                      key={zone}
-                      style={[
-                        styles.zonePill,
-                        {
-                          backgroundColor: "transparent",
-                          borderColor: isActive ? theme.text : theme.border,
-                          borderWidth: isActive ? 2 : 1,
-                        },
-                      ]}
-                      onPress={() => handleSelectZone(zone)}
-                      activeOpacity={0.8}
-                    >
-                      <Text
+            {/* Horizontal Zone Selector Pills from Database */}
+            {availableZones.length > 0 && (
+              <View style={styles.zonePillsWrapper}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.zonePillsContainer}>
+                  {availableZones.map((zone) => {
+                    const isActive = selectedZone === zone;
+                    return (
+                      <TouchableOpacity
+                        key={zone}
                         style={[
-                          styles.zonePillText,
+                          styles.zonePill,
                           {
-                            color: isActive ? theme.text : theme.textSecondary,
-                            fontWeight: isActive ? "800" : "600",
+                            backgroundColor: "transparent",
+                            borderColor: isActive ? theme.text : theme.border,
+                            borderWidth: isActive ? 2 : 1,
                           },
                         ]}
+                        onPress={() => handleSelectZone(zone)}
+                        activeOpacity={0.8}
                       >
-                        {zone}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
+                        <Text
+                          style={[
+                            styles.zonePillText,
+                            {
+                              color: isActive ? theme.text : theme.textSecondary,
+                              fontWeight: isActive ? "600" : "400",
+                            },
+                          ]}
+                        >
+                          {zone}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+
+            {/* Zone Description Subheader & 2D / 3D Aerial View Switcher */}
+            <View style={{ paddingHorizontal: 20, marginBottom: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={{ fontSize: 13, fontWeight: "500", color: theme.text }}>
+                  {currentLot.title}
+                </Text>
+                <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 2 }}>
+                  {currentLot.description}
+                </Text>
+              </View>
+
+              <TouchableOpacity
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 4,
+                  paddingHorizontal: 10,
+                  paddingVertical: 5,
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  backgroundColor: is3DView ? theme.evGreen : theme.background,
+                  borderColor: is3DView ? theme.evGreen : theme.border,
+                }}
+                onPress={() => setIs3DView(!is3DView)}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name={is3DView ? "cube" : "cube-outline"}
+                  size={13}
+                  color={is3DView ? theme.evGreenText : theme.text}
+                />
+                <Text
+                  style={{
+                    fontSize: 11,
+                    fontWeight: "600",
+                    color: is3DView ? theme.evGreenText : theme.text,
+                  }}
+                >
+                  {is3DView ? "3D Aerial" : "2D Grid"}
+                </Text>
+              </TouchableOpacity>
             </View>
 
-            {/* Zone Description Subheader */}
-            <View style={{ paddingHorizontal: 20, marginBottom: 12 }}>
-              <Text style={{ fontSize: 13, fontWeight: "700", color: theme.text }}>
-                {currentLot.title}
-              </Text>
-              <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 2 }}>
-                {currentLot.description}
-              </Text>
-            </View>
-
-            {/* 2-Column Slot Grid showing Available Spots and Parked Cars in this Zone */}
+            {is3DView ? (
+              <View style={{ maxHeight: 380, paddingHorizontal: 16 }}>
+                <AerialParkingLot3D
+                  topology={(sheetStation as any)?.layout_topology || "perpendicular"}
+                  spaces={
+                    sheetSpaces.length > 0
+                      ? (selectedZone ? sheetSpaces.filter((s) => (s.zone_code || "EV Hub") === selectedZone) : sheetSpaces)
+                      : (sheetStation?.chargers || []).map((ch) => ({
+                          id: ch.id,
+                          location_id: sheetStation?.id || "",
+                          space_number: ch.station_identifier,
+                          zone_code: selectedZone || "EV Hub",
+                          space_type: "ev" as const,
+                          is_occupied: ch.status !== "available",
+                          qr_code_token: `QR-${ch.station_identifier}`,
+                          watt_power_kw: ch.max_output_kw,
+                        }))
+                  }
+                  selectedSpaceId={
+                    sheetSpaces.find((s) => s.space_number === selectedBay)?.id || null
+                  }
+                  onSelectSpace={(sp) => {
+                    setSelectedBay(sp.space_number);
+                    setInspectedSpace(sp);
+                  }}
+                  currentZone={selectedZone || "EV Hub"}
+                  locationName={sheetStation?.name || "EV Charging Station"}
+                  lotKind="charging"
+                  hideSelectionCard={true}
+                  compact={true}
+                />
+              </View>
+            ) : (
+            /* 2-Column Slot Grid showing Available Spots and Parked Cars in this Zone */
             <ScrollView
               style={styles.spotsScroll}
               contentContainerStyle={styles.spotsContent}
@@ -986,21 +1017,51 @@ const EVChargers = () => {
                 />
               }
             >
+              {loadingSpaces ? (
+                <BayGridSkeleton count={6} />
+              ) : sheetSpaces.length === 0 && (!sheetStation?.chargers || sheetStation.chargers.length === 0) ? (
+                <View style={{ paddingVertical: 32, alignItems: "center" }}>
+                  <Ionicons name="flash-outline" size={28} color={theme.textSecondary} />
+                  <Text style={{ fontSize: 13, fontWeight: "500", color: theme.text, marginTop: 8 }}>
+                    No bays registered yet
+                  </Text>
+                  <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 4, textAlign: "center" }}>
+                    No charging bays currently registered for this station.
+                  </Text>
+                </View>
+              ) : (
               <View style={styles.spotsTwoColGrid}>
                 {/* Left Column */}
                 <View style={styles.spotsColumn}>
                   {currentLot.leftColumn.map((spot) => {
+                    const matchedSpace = sheetSpaces.find((s) => s.space_number === spot.bayNumber) || {
+                      id: spot.id,
+                      location_id: sheetStation?.id || "",
+                      space_number: spot.bayNumber,
+                      zone_code: selectedZone || "EV Hub",
+                      space_type: "ev" as const,
+                      is_occupied: spot.isOccupied,
+                      qr_code_token: `QR-${spot.bayNumber}`,
+                      watt_power_kw: parseInt(spot.spotType || "120", 10) || 120,
+                    };
+
                     if (spot.isOccupied) {
                       return (
-                        <View
+                        <TouchableOpacity
                           key={spot.id}
+                          activeOpacity={0.8}
+                          onPress={() => setInspectedSpace(matchedSpace)}
                           style={[
                             styles.spotOccupiedBox,
                             { backgroundColor: theme.background, borderColor: theme.border },
                           ]}
                         >
                           <HorizontalUltraRealisticCar color={spot.carColor} />
-                        </View>
+                          <View style={{ position: "absolute", bottom: 2, right: 6, flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 }}>
+                            <Ionicons name="flash" size={8} color="#10B981" />
+                            <Text style={{ fontSize: 8, fontWeight: "700", color: "#10B981" }}>CHARGING</Text>
+                          </View>
+                        </TouchableOpacity>
                       );
                     }
                     const isSelected = selectedBay === spot.bayNumber;
@@ -1011,22 +1072,34 @@ const EVChargers = () => {
                           styles.spotAvailableCard,
                           {
                             backgroundColor: theme.background,
-                            borderColor: isSelected ? "#10B981" : theme.border,
+                            borderColor: isSelected ? theme.evGreen : theme.evGreenBorder,
                             borderWidth: isSelected ? 2.5 : 1,
                           },
                         ]}
-                        onPress={() => setSelectedBay(spot.bayNumber)}
+                        onPress={() => {
+                          setSelectedBay(spot.bayNumber);
+                          setInspectedSpace(matchedSpace);
+                        }}
                         activeOpacity={0.8}
                       >
-                        <Text style={[styles.spotNumberText, { color: theme.text }]}>
-                          {spot.bayNumber}
-                        </Text>
-                        <Text style={[styles.spotAvailableText, { color: isSelected ? "#10B981" : theme.textSecondary }]}>
-                          {spot.spotType || "Available"}
+                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                          <Text style={[styles.spotNumberText, { color: theme.text }]}>
+                            Bay {spot.bayNumber}
+                          </Text>
+                          <View style={[styles.livePulseMiniDot, { backgroundColor: theme.evGreen }]} />
+                        </View>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 4 }}>
+                          <Ionicons name="flash" size={10} color={theme.evGreen} />
+                          <Text style={{ fontSize: 10, fontWeight: "500", color: theme.evGreen }}>
+                            {spot.spotType || "DC Fast"}
+                          </Text>
+                        </View>
+                        <Text style={{ fontSize: 9.5, fontWeight: "500", color: theme.textSecondary, marginTop: 2 }}>
+                          9k–10k RWF • 0 Park
                         </Text>
                         {isSelected && (
-                          <View style={[styles.selectedCheckDot, { backgroundColor: "#10B981" }]}>
-                            <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                          <View style={[styles.selectedCheckDot, { backgroundColor: theme.evGreen }]}>
+                            <Ionicons name="checkmark" size={10} color={theme.evGreenText} />
                           </View>
                         )}
                       </TouchableOpacity>
@@ -1037,17 +1110,34 @@ const EVChargers = () => {
                 {/* Right Column */}
                 <View style={styles.spotsColumn}>
                   {currentLot.rightColumn.map((spot) => {
+                    const matchedSpace = sheetSpaces.find((s) => s.space_number === spot.bayNumber) || {
+                      id: spot.id,
+                      location_id: sheetStation?.id || "",
+                      space_number: spot.bayNumber,
+                      zone_code: selectedZone || "EV Hub",
+                      space_type: "ev" as const,
+                      is_occupied: spot.isOccupied,
+                      qr_code_token: `QR-${spot.bayNumber}`,
+                      watt_power_kw: parseInt(spot.spotType || "120", 10) || 120,
+                    };
+
                     if (spot.isOccupied) {
                       return (
-                        <View
+                        <TouchableOpacity
                           key={spot.id}
+                          activeOpacity={0.8}
+                          onPress={() => setInspectedSpace(matchedSpace)}
                           style={[
                             styles.spotOccupiedBox,
                             { backgroundColor: theme.background, borderColor: theme.border },
                           ]}
                         >
                           <HorizontalUltraRealisticCar color={spot.carColor} />
-                        </View>
+                          <View style={{ position: "absolute", bottom: 2, right: 6, flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 }}>
+                            <Ionicons name="flash" size={8} color="#10B981" />
+                            <Text style={{ fontSize: 8, fontWeight: "700", color: "#10B981" }}>CHARGING</Text>
+                          </View>
+                        </TouchableOpacity>
                       );
                     }
                     const isSelected = selectedBay === spot.bayNumber;
@@ -1058,22 +1148,34 @@ const EVChargers = () => {
                           styles.spotAvailableCard,
                           {
                             backgroundColor: theme.background,
-                            borderColor: isSelected ? "#10B981" : theme.border,
+                            borderColor: isSelected ? theme.evGreen : theme.evGreenBorder,
                             borderWidth: isSelected ? 2.5 : 1,
                           },
                         ]}
-                        onPress={() => setSelectedBay(spot.bayNumber)}
+                        onPress={() => {
+                          setSelectedBay(spot.bayNumber);
+                          setInspectedSpace(matchedSpace);
+                        }}
                         activeOpacity={0.8}
                       >
-                        <Text style={[styles.spotNumberText, { color: theme.text }]}>
-                          {spot.bayNumber}
-                        </Text>
-                        <Text style={[styles.spotAvailableText, { color: isSelected ? "#10B981" : theme.textSecondary }]}>
-                          {spot.spotType || "Available"}
+                        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                          <Text style={[styles.spotNumberText, { color: theme.text }]}>
+                            Bay {spot.bayNumber}
+                          </Text>
+                          <View style={[styles.livePulseMiniDot, { backgroundColor: theme.evGreen }]} />
+                        </View>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 3, marginTop: 4 }}>
+                          <Ionicons name="flash" size={10} color={theme.evGreen} />
+                          <Text style={{ fontSize: 10, fontWeight: "500", color: theme.evGreen }}>
+                            {spot.spotType || "DC Fast"}
+                          </Text>
+                        </View>
+                        <Text style={{ fontSize: 9.5, fontWeight: "500", color: theme.textSecondary, marginTop: 2 }}>
+                          9k–10k RWF • 0 Park
                         </Text>
                         {isSelected && (
-                          <View style={[styles.selectedCheckDot, { backgroundColor: "#10B981" }]}>
-                            <Ionicons name="checkmark" size={10} color="#FFFFFF" />
+                          <View style={[styles.selectedCheckDot, { backgroundColor: theme.evGreen }]}>
+                            <Ionicons name="checkmark" size={10} color={theme.evGreenText} />
                           </View>
                         )}
                       </TouchableOpacity>
@@ -1081,13 +1183,27 @@ const EVChargers = () => {
                   })}
                 </View>
               </View>
+              )}
             </ScrollView>
+            )}
 
             {/* Bottom Sticky Continue Button with Right Arrow Circle */}
             <View style={[styles.sheetStickyBottomBar, { borderTopColor: theme.border, backgroundColor: theme.surface }]}>
               <TouchableOpacity
-                style={[styles.sheetContinuePillBtn, { backgroundColor: theme.primaryBtnBg }]}
-                onPress={() => setConfirmModalVisible(true)}
+                disabled={!selectedBay && (!sheetStation?.chargers || sheetStation.chargers.length === 0)}
+                style={[
+                  styles.sheetContinuePillBtn,
+                  {
+                    backgroundColor: theme.primaryBtnBg,
+                    opacity: !selectedBay && (!sheetStation?.chargers || sheetStation.chargers.length === 0) ? 0.5 : 1,
+                  },
+                ]}
+                onPress={() => {
+                  if (!selectedBay && sheetStation?.chargers?.[0]?.station_identifier) {
+                    setSelectedBay(sheetStation.chargers[0].station_identifier);
+                  }
+                  setConfirmModalVisible(true);
+                }}
                 activeOpacity={0.88}
               >
                 <Text style={[styles.sheetContinueBtnText, { color: theme.primaryBtnText }]}>Continue</Text>
@@ -1097,7 +1213,22 @@ const EVChargers = () => {
               </TouchableOpacity>
             </View>
 
-            {/* Sub-sheet / Nested Confirm Booking Sheet (3rd screen in reference screenshot) */}
+            {/* EV Stall Telemetry & Pre-payment Inspection Modal */}
+            {inspectedSpace && sheetStation && (
+              <EvBayDetailModal
+                locationId={sheetStation.id}
+                space={inspectedSpace}
+                chargers={sheetStation.chargers || []}
+                onClose={() => setInspectedSpace(null)}
+                onStartCharging={(details) => {
+                  setInspectedSpace(null);
+                  setSelectedBay(details.bayNumber);
+                  setConfirmModalVisible(true);
+                }}
+              />
+            )}
+
+            {/* Sub-sheet / Nested Confirm Booking Sheet */}
             {confirmModalVisible && (
               <View style={styles.confirmSubSheetOverlay}>
                 <View style={[styles.confirmSubSheetCard, { backgroundColor: theme.surface, borderColor: theme.border }]}>
@@ -1120,60 +1251,174 @@ const EVChargers = () => {
                     </TouchableOpacity>
                   </View>
 
-                  {/* Two Badges: Parking zone & Parking place */}
+                  {/* Two Badges: Charging zone & Charging bay */}
                   <View style={styles.confirmBadgesRow}>
                     <View style={[styles.confirmBadgeBox, { backgroundColor: theme.background, borderColor: theme.border }]}>
-                      <Text style={[styles.confirmBadgeLabel, { color: theme.textSecondary }]}>Parking zone</Text>
-                      <Text style={[styles.confirmBadgeValue, { color: theme.text }]}>{selectedZone}</Text>
+                      <Text style={[styles.confirmBadgeLabel, { color: theme.textSecondary }]}>Charging zone</Text>
+                      <Text style={[styles.confirmBadgeValue, { color: theme.text }]}>{selectedZone || "EV Hub"}</Text>
                     </View>
 
                     <View style={[styles.confirmBadgeBox, { backgroundColor: theme.background, borderColor: theme.border }]}>
-                      <Text style={[styles.confirmBadgeLabel, { color: theme.textSecondary }]}>Parking place</Text>
-                      <Text style={[styles.confirmBadgeValue, { color: theme.text }]}>{selectedBay}</Text>
+                      <Text style={[styles.confirmBadgeLabel, { color: theme.textSecondary }]}>Charging bay</Text>
+                      <Text style={[styles.confirmBadgeValue, { color: theme.text }]}>{selectedBay || "-"}</Text>
                     </View>
+                  </View>
+
+                  {/* Charger Hardware & Plug Specification Details */}
+                  {(() => {
+                    const matchedCharger =
+                      sheetStation?.chargers?.find((c) => c.station_identifier === selectedBay) ||
+                      sheetStation?.chargers?.[0];
+                    const plug = matchedCharger?.connector_type || "CCS2 DC Fast";
+                    const kw = matchedCharger?.max_output_kw || 120;
+                    const compatible = isPlugCompatible(driverVehicle.plugType, plug);
+
+                    const est = estimateChargingForVehicle({
+                      chargerKw: kw,
+                      connectorType: plug,
+                      batteryCapacityKwh: driverVehicle.batteryCapacityKwh,
+                      currentSocPercent: driverVehicle.batteryLevelPercent,
+                    });
+
+                    return (
+                      <View style={{ gap: 8, marginBottom: 14 }}>
+                        <View style={{ flexDirection: "row", gap: 8 }}>
+                          <View style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, backgroundColor: theme.background, borderColor: theme.border, alignItems: "center" }}>
+                            <Text style={{ fontSize: 9.5, color: theme.textSecondary }}>Plug Type</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "600", color: theme.text, marginTop: 2 }}>{plug}</Text>
+                          </View>
+                          <View style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, backgroundColor: theme.background, borderColor: theme.border, alignItems: "center" }}>
+                            <Text style={{ fontSize: 9.5, color: theme.textSecondary }}>Peak Output</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "600", color: theme.text, marginTop: 2 }}>{kw} kW</Text>
+                          </View>
+                          <View style={{ flex: 1, padding: 8, borderRadius: 10, borderWidth: 1, backgroundColor: theme.background, borderColor: theme.border, alignItems: "center" }}>
+                            <Text style={{ fontSize: 9.5, color: theme.textSecondary }}>Est. to 80%</Text>
+                            <Text style={{ fontSize: 12, fontWeight: "600", color: theme.text, marginTop: 2 }}>
+                              {driverVehicle.batteryCapacityKwh > 0 ? formatDurationMins(est.minutesTo80) : "~25m"}
+                            </Text>
+                          </View>
+                        </View>
+
+                        {compatible === false && (
+                          <View style={{ flexDirection: "row", alignItems: "center", gap: 5, padding: 6, borderRadius: 8, backgroundColor: "rgba(239, 68, 68, 0.08)", borderWidth: 1, borderColor: "rgba(239, 68, 68, 0.3)" }}>
+                            <Ionicons name="warning-outline" size={12} color="#EF4444" />
+                            <Text style={{ fontSize: 10, color: "#EF4444", flex: 1 }}>
+                              Plug mismatch: car has {driverVehicle.plugType}, bay has {plug}. An adapter is required.
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })()}
+
+                  {/* Separated Charging vs Parking Breakdown Banner */}
+                  <View style={{ backgroundColor: theme.background, borderColor: theme.border, borderWidth: 1, borderRadius: 14, padding: 12, marginBottom: 14 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                      <Ionicons name="flash" size={13} color={theme.evGreen} />
+                      <Text style={{ fontSize: 12, fontWeight: "600", color: theme.text }}>
+                        EV Charging (Separated from Parking)
+                      </Text>
+                    </View>
+                    <Text style={{ fontSize: 11, color: theme.textSecondary, lineHeight: 16 }}>
+                      • <Text style={{ fontWeight: "600", color: theme.text }}>9,000 RWF</Text> session charging fee{"\n"}
+                      • <Text style={{ fontWeight: "500", color: theme.textSecondary }}>Mobile Money (0790889899)</Text>{"\n"}
+                      • <Text style={{ fontWeight: "500", color: theme.text }}>0 RWF</Text> parking fee for active EV charging
+                    </Text>
                   </View>
 
                   {/* Payment Row */}
                   <View style={styles.confirmPaymentSection}>
-                    <Text style={[styles.confirmPaymentLabel, { color: theme.textSecondary }]}>Payment</Text>
-                    <View style={[styles.confirmPaymentCard, { backgroundColor: theme.background, borderColor: theme.border }]}>
+                    <Text style={[styles.confirmPaymentLabel, { color: theme.textSecondary }]}>Direct Payment</Text>
+                    <View
+                      style={[styles.confirmPaymentCard, { backgroundColor: theme.background, borderColor: theme.border }]}
+                    >
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                        <Ionicons name="card-outline" size={20} color={theme.text} />
-                        <Text style={[styles.confirmPaymentText, { color: theme.text }]}>MTN MoMo / Card ••••2456</Text>
+                        <Ionicons name="phone-portrait-outline" size={20} color={theme.text} />
+                        <Text style={[styles.confirmPaymentText, { color: theme.text }]}>
+                          Mobile Payment (0790889899)
+                        </Text>
                       </View>
-                      <Ionicons name="pencil-outline" size={16} color={theme.textSecondary} />
                     </View>
                   </View>
 
                   {/* Price & Confirm Button Row */}
                   <View style={styles.confirmBottomActionRow}>
                     <View>
-                      <Text style={[styles.confirmPriceNumber, { color: theme.text }]}>{sheetStation?.tariff || "250 RWF/kWh"}</Text>
-                      <Text style={[styles.confirmPriceUnit, { color: theme.textSecondary }]}>per kWh draw</Text>
+                      <Text style={[styles.confirmPriceNumber, { color: theme.text }]}>9,000 RWF</Text>
+                      <Text style={[styles.confirmPriceUnit, { color: theme.textSecondary, fontWeight: "500" }]}>Session charging fee (0 RWF Park)</Text>
                     </View>
 
                     <TouchableOpacity
-                      style={[styles.confirmFinalBtn, { backgroundColor: theme.primaryBtnBg }]}
-                      onPress={() => {
+                      style={[styles.confirmFinalBtn, { backgroundColor: theme.primaryBtnBg, flexDirection: "row", alignItems: "center", gap: 6 }]}
+                      onPress={async () => {
+                        const sName = sheetStation?.name || "";
+                        const sLocId = sheetStation?.id || "";
+                        const sBay = selectedBay || sheetStation?.chargers?.[0]?.station_identifier || "";
+                        const matchedCharger =
+                          sheetStation?.chargers?.find((c) => c.station_identifier === sBay) ||
+                          sheetStation?.chargers?.[0];
+                        const isElectric = driverVehicle.vehicleType === "ev";
+
+                        if (!isElectric) {
+                          Alert.alert(
+                            "Unauthorized EV Bay Parking",
+                            `Your active vehicle (${driverVehicle.makeModel || "Combustion"} • ${driverVehicle.plateNumber || "No plate"}) is not an electric vehicle.\n\nParking in an EV charging stall while not an EV incurs a 5,000 RWF municipal contravention fine.`,
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              {
+                                text: "Accept Fine (5,000 RWF)",
+                                style: "destructive",
+                                onPress: async () => {
+                                  await issueZeroContactCitation({
+                                    plateNumber: driverVehicle.plateNumber || "UNREGISTERED",
+                                    locationId: sLocId,
+                                    reason: "unauthorized_ev",
+                                    fineAmount: 5000,
+                                  });
+                                  setConfirmModalVisible(false);
+                                  setSheetStation(null);
+                                  Alert.alert(
+                                    "Citation Issued",
+                                    `A 5,000 RWF fine has been recorded against ${driverVehicle.plateNumber || "your vehicle"} for unauthorized EV stall occupancy.`
+                                  );
+                                },
+                              },
+                            ]
+                          );
+                          return;
+                        }
+
                         setConfirmModalVisible(false);
-                        const sName = sheetStation?.name || "Kigali EV Charging Hub";
-                        const sBay = selectedBay || "EV-01";
+                        const maxKw = matchedCharger?.max_output_kw || 120;
+                        const evBill = 9000;
+
+                        // Automatically initiate payment in background
+                        initiateMobilePayment(evBill).catch(() => {});
+
                         setSheetStation(null);
                         router.push({
-                          pathname: "/ev_charging",
+                          pathname: "/charging_receipt",
                           params: {
+                            locationId: sLocId,
+                            chargerId: matchedCharger?.id || "",
                             name: sName,
                             bayNumber: sBay,
-                            kwh: "72",
-                            soc: "71",
-                            rate: "250",
+                            plate: driverVehicle.plateNumber || "EV",
+                            powerKw: String(maxKw),
+                            soc: String(driverVehicle.batteryLevelPercent || 20),
                             currency: "RWF",
+                            durationHours: "1",
+                            durationMinutes: "60",
+                            durationSeconds: "3600",
+                            billAmount: String(evBill),
+                            receiptNumber: `PZ-EV-${Date.now().toString().slice(-4)}`,
                           },
                         });
                       }}
                       activeOpacity={0.88}
                     >
-                      <Text style={[styles.confirmFinalBtnText, { color: theme.primaryBtnText }]}>Confirm</Text>
+                      <Ionicons name="card-outline" size={15} color={theme.primaryBtnText} />
+                      <Text style={[styles.confirmFinalBtnText, { color: theme.primaryBtnText }]}>Pay Now</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -1214,13 +1459,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   headerTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    letterSpacing: -0.3,
+    fontSize: 20,
+    fontWeight: "700",
+    letterSpacing: -0.4,
   },
   headerSubtitle: {
     fontSize: 11,
-    fontWeight: "500",
+    fontWeight: "400",
     marginTop: 2,
   },
   header: {
@@ -1243,13 +1488,13 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.3,
   },
   subtitle: {
     fontSize: 11,
     marginTop: 2,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   liveFeedBadge: {
     flexDirection: "row",
@@ -1265,10 +1510,31 @@ const styles = StyleSheet.create({
     height: 7,
     borderRadius: 3.5,
   },
+  livePulseMiniDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
   liveFeedText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
     letterSpacing: 0.5,
+  },
+  cardHardwareStatusRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    marginTop: 6,
+    marginBottom: 8,
+  },
+  hardwareStatusDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  hardwareStatusText: {
+    fontSize: 10,
+    fontWeight: "400",
   },
 
   /* View Mode Switcher */
@@ -1300,7 +1566,7 @@ const styles = StyleSheet.create({
   },
   layoutToggleText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 
   /* Search */
@@ -1339,7 +1605,7 @@ const styles = StyleSheet.create({
   },
   filterChipText: {
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 
   centered: {
@@ -1368,7 +1634,7 @@ const styles = StyleSheet.create({
   },
   evMapPinText: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   evPinCountBadge: {
     width: 16,
@@ -1381,7 +1647,7 @@ const styles = StyleSheet.create({
   evPinCountText: {
     color: "#FFFFFF",
     fontSize: 9,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   mapBottomCard: {
     position: "absolute",
@@ -1404,12 +1670,12 @@ const styles = StyleSheet.create({
   },
   mapCardTitle: {
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   mapCardAddress: {
     fontSize: 11,
     marginTop: 2,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   mapCardTariffBadge: {
     borderWidth: 1,
@@ -1419,7 +1685,7 @@ const styles = StyleSheet.create({
   },
   mapCardTariffText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   mapPlugsScroll: {
     flexDirection: "row",
@@ -1433,7 +1699,7 @@ const styles = StyleSheet.create({
   },
   mapPlugId: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   mapPlugStatusDot: {
     width: 7,
@@ -1452,7 +1718,7 @@ const styles = StyleSheet.create({
   },
   mapPlugReserveText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 
   /* Grid Layout Mode */
@@ -1492,7 +1758,7 @@ const styles = StyleSheet.create({
   },
   gridPowerText: {
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   gridStatusPill: {
     borderRadius: 8,
@@ -1501,11 +1767,11 @@ const styles = StyleSheet.create({
   },
   gridStatusPillText: {
     fontSize: 9,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   gridTitle: {
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
     minHeight: 34,
     marginBottom: 2,
   },
@@ -1521,11 +1787,11 @@ const styles = StyleSheet.create({
   },
   gridDistance: {
     fontSize: 10,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   gridTariff: {
     fontSize: 9,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   gridPlugsRow: {
     flexDirection: "row",
@@ -1541,7 +1807,7 @@ const styles = StyleSheet.create({
   },
   gridPlugChipText: {
     fontSize: 8,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   gridCtaBtn: {
     borderRadius: 10,
@@ -1550,7 +1816,7 @@ const styles = StyleSheet.create({
   },
   gridCtaBtnText: {
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 
   /* List Mode */
@@ -1577,7 +1843,7 @@ const styles = StyleSheet.create({
   },
   stationName: {
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   stationAddress: {
     fontSize: 11,
@@ -1591,7 +1857,7 @@ const styles = StyleSheet.create({
   },
   stationKwhText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   chargersContainer: {
     flexDirection: "row",
@@ -1611,7 +1877,7 @@ const styles = StyleSheet.create({
   },
   chargerIdentifier: {
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   statusIndicator: {
     paddingHorizontal: 5,
@@ -1620,11 +1886,11 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 8,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   chargerSpecs: {
     fontSize: 10,
-    fontWeight: "700",
+    fontWeight: "500",
     marginBottom: 2,
   },
   chargerTelemetry: {
@@ -1638,7 +1904,7 @@ const styles = StyleSheet.create({
   },
   reserveBtnText: {
     fontSize: 10,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 
   emptyContainer: {
@@ -1649,7 +1915,7 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "400",
   },
   emptySubtitle: {
     fontSize: 12,
@@ -1734,14 +2000,14 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   sheetStationTitle: {
-    fontSize: 20,
-    fontWeight: "900",
-    letterSpacing: -0.3,
+    fontSize: 21,
+    fontWeight: "700",
+    letterSpacing: -0.4,
   },
   sheetStationAddress: {
     fontSize: 12,
     marginTop: 2,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   sheetCloseBtn: {
     width: 34,
@@ -1768,7 +2034,7 @@ const styles = StyleSheet.create({
   },
   zonePillText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
   },
 
   /* 2-Column Slot Grid */
@@ -1807,12 +2073,12 @@ const styles = StyleSheet.create({
   },
   spotNumberText: {
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "600",
     letterSpacing: -0.2,
   },
   spotAvailableText: {
     fontSize: 10,
-    fontWeight: "600",
+    fontWeight: "400",
     marginTop: 1,
   },
   spotOccupiedBox: {
@@ -1841,7 +2107,7 @@ const styles = StyleSheet.create({
   },
   sheetContinueBtnText: {
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   circleArrowBtnBox: {
     position: "absolute",
@@ -1874,8 +2140,9 @@ const styles = StyleSheet.create({
     marginBottom: 18,
   },
   confirmHeaderTitle: {
-    fontSize: 19,
-    fontWeight: "900",
+    fontSize: 20,
+    fontWeight: "700",
+    letterSpacing: -0.4,
   },
   confirmHeaderSubtitle: {
     fontSize: 12,
@@ -1896,19 +2163,19 @@ const styles = StyleSheet.create({
   },
   confirmBadgeLabel: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "400",
     marginBottom: 4,
   },
   confirmBadgeValue: {
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "500",
   },
   confirmPaymentSection: {
     marginBottom: 20,
   },
   confirmPaymentLabel: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
     marginBottom: 8,
   },
   confirmPaymentCard: {
@@ -1922,7 +2189,7 @@ const styles = StyleSheet.create({
   },
   confirmPaymentText: {
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   confirmBottomActionRow: {
     flexDirection: "row",
@@ -1931,11 +2198,11 @@ const styles = StyleSheet.create({
   },
   confirmPriceNumber: {
     fontSize: 22,
-    fontWeight: "900",
+    fontWeight: "600",
   },
   confirmPriceUnit: {
     fontSize: 11,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   confirmFinalBtn: {
     paddingVertical: 14,
@@ -1946,7 +2213,7 @@ const styles = StyleSheet.create({
   },
   confirmFinalBtnText: {
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   /* Screenshot Map Styles */
   radarOuterCircle: {
@@ -1987,7 +2254,7 @@ const styles = StyleSheet.create({
   distanceBadgeText: {
     color: "#FFFFFF",
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   markerContainer: {
     alignItems: "center",
@@ -2010,7 +2277,7 @@ const styles = StyleSheet.create({
   },
   rateBubbleText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   rateBubbleTextActive: {
     color: "#FFFFFF",
@@ -2060,7 +2327,7 @@ const styles = StyleSheet.create({
   screenshotSearchInput: {
     flex: 1,
     fontSize: 15,
-    fontWeight: "500",
+    fontWeight: "400",
   },
   searchIconBtn: {
     padding: 6,
@@ -2111,7 +2378,7 @@ const styles = StyleSheet.create({
   },
   bottomCardTitle: {
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   bottomCardAddress: {
     fontSize: 12,
@@ -2139,7 +2406,7 @@ const styles = StyleSheet.create({
   },
   statBadgeText: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   statDotSeparator: {
     color: "#A1A1AA",
@@ -2191,7 +2458,7 @@ const styles = StyleSheet.create({
   choosePlaceBtnText: {
     color: "#FFFFFF",
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   /* Reference Screenshot Map UI Styles */
   originMarkerBadge: {
@@ -2300,7 +2567,7 @@ const styles = StyleSheet.create({
   topSearchCapsuleInput: {
     flex: 1,
     fontSize: 14,
-    fontWeight: "600",
+    fontWeight: "400",
   },
   gpsCrosshairBtn: {
     padding: 4,
@@ -2313,9 +2580,9 @@ const styles = StyleSheet.create({
     zIndex: 30,
   },
   nearbySectionTitle: {
-    fontSize: 18,
-    fontWeight: "900",
-    letterSpacing: -0.2,
+    fontSize: 21,
+    fontWeight: "700",
+    letterSpacing: -0.4,
     paddingHorizontal: 20,
     marginBottom: 12,
   },
@@ -2345,7 +2612,7 @@ const styles = StyleSheet.create({
   },
   nearbyTitleText: {
     fontSize: 15,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: -0.2,
     marginBottom: 6,
   },
@@ -2360,12 +2627,12 @@ const styles = StyleSheet.create({
   },
   metricLabelText: {
     fontSize: 11,
-    fontWeight: "500",
+    fontWeight: "400",
     marginBottom: 2,
   },
   metricValText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
   mapDirectionBtn: {
     flexDirection: "row",
@@ -2378,6 +2645,6 @@ const styles = StyleSheet.create({
   },
   mapDirectionBtnText: {
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "500",
   },
 });
