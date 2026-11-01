@@ -16,6 +16,14 @@ module.exports = ({ config }) => {
       ...(downloadToken
         ? ["@rnmapbox/maps"]
         : []),
+      [
+        "react-native-ble-plx",
+        {
+          isBackgroundEnabled: false,
+          modes: ["peripheral", "central"],
+          bluetoothAlwaysPermission: "Allow ParkZone to connect to nearby parking and charging devices via Bluetooth.",
+        },
+      ],
     ],
   };
 };
