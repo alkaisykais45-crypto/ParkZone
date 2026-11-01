@@ -1,5 +1,4 @@
 
-// We can read charger status through CSMS
 
 
 
