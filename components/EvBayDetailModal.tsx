@@ -100,23 +100,21 @@ export const EvBayDetailModal: React.FC<Props> = ({
                 ]}
               />
               <Text style={[styles.title, { color: theme.text }]}>
-                Bay {space.space_number}
+                {space.space_number}
               </Text>
               <View
                 style={[
                   styles.badge,
                   {
-                    backgroundColor: space.is_occupied
-                      ? theme.dangerSoft
-                      : theme.evGreenSoft,
-                    borderColor: space.is_occupied ? theme.danger : theme.evGreenBorder,
+                    backgroundColor: theme.surfaceMuted,
+                    borderColor: theme.border,
                   },
                 ]}
               >
                 <Text
                   style={[
                     styles.badgeText,
-                    { color: space.is_occupied ? theme.danger : theme.evGreen },
+                    { color: space.is_occupied ? theme.textSecondary : theme.evGreen },
                   ]}
                 >
                   {space.is_occupied ? "CURRENTLY CHARGING" : "AVAILABLE"}
@@ -155,8 +153,8 @@ export const EvBayDetailModal: React.FC<Props> = ({
                   style={[
                     styles.sectionCallout,
                     {
-                      backgroundColor: "rgba(16, 185, 129, 0.08)",
-                      borderColor: theme.evGreenBorder,
+                      backgroundColor: theme.surfaceMuted,
+                      borderColor: theme.border,
                     },
                   ]}
                 >
@@ -293,8 +291,8 @@ export const EvBayDetailModal: React.FC<Props> = ({
                     style={[
                       styles.compatibilityBanner,
                       {
-                        backgroundColor: compatible ? theme.evGreenSoft : "rgba(239, 68, 68, 0.08)",
-                        borderColor: compatible ? theme.evGreenBorder : "rgba(239, 68, 68, 0.3)",
+                        backgroundColor: theme.surfaceMuted,
+                        borderColor: theme.border,
                       },
                     ]}
                   >

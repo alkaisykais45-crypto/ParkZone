@@ -61,6 +61,7 @@ import {
   verifyPlateStatus,
   subscribeToSpacesRealtime,
   resolveParkedCarColor,
+  setUserCarColorsCache,
 } from "../services/parking";
 import { VoiceGuidance } from "../services/voiceGuidance";
 import { initiateMobilePayment } from "../services/mobilePayment";
@@ -86,6 +87,12 @@ import { ParkingHistoryRecord } from "../recent_parkings";
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 const width = SCREEN_WIDTH;
+
+const sliceAreaName = (name?: string, maxLen = 22): string => {
+  if (!name) return "";
+  const trimmed = name.trim();
+  return trimmed.length > maxLen ? `${trimmed.slice(0, maxLen).trim()}...` : trimmed;
+};
 
 const KIGALI_REGION = {
   latitude: -1.9536,
@@ -126,15 +133,8 @@ const haversineKm = (lat1: number, lon1: number, lat2: number, lon2: number): nu
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 };
 
-// Google Gemini signature 4-color aurora palette (Blue, Violet, Coral-Rose, Sky-Cyan)
-const GEMINI_AI_COLORS = ["#4285F4", "#9B72CB", "#D96570", "#38BDF8"] as const;
-const AI_BW_BORDER_COLORS_DARK = GEMINI_AI_COLORS;
-const AI_BW_BORDER_COLORS_LIGHT = GEMINI_AI_COLORS;
-
-const AnimatedTouchableOpacity = Animated.createAnimatedComponent(TouchableOpacity);
-
 interface AnimatedBwGradientCardProps {
-  active: boolean;
+  active?: boolean;
   isThinking?: boolean;
   borderRadius?: number;
   borderWidth?: number;
@@ -148,193 +148,19 @@ interface AnimatedBwGradientCardProps {
 }
 
 const AnimatedBwGradientCard: React.FC<AnimatedBwGradientCardProps> = ({
-  active,
-  isThinking = false,
-  borderRadius = 20,
-  borderWidth = 2,
   style,
-  animValue,
-  colorAnimValue,
   onPress,
   activeOpacity = 0.88,
   children,
 }) => {
-  const uid = useRef(`gem_${Math.random().toString(36).slice(2, 8)}`).current;
-  const localAnim = useRef(new Animated.Value(0)).current;
-  const [cardSize, setCardSize] = useState({ width: 0, height: 0 });
-
-  useEffect(() => {
-    if (!active || animValue) return;
-    const loop = Animated.loop(
-      Animated.timing(localAnim, {
-        toValue: 1,
-        duration: isThinking ? 1800 : 3200,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
+  if (onPress) {
+    return (
+      <TouchableOpacity style={style} onPress={onPress} activeOpacity={activeOpacity}>
+        {children}
+      </TouchableOpacity>
     );
-    loop.start();
-    return () => loop.stop();
-  }, [active, animValue, isThinking, localAnim]);
-
-  if (!active) {
-    if (onPress) {
-      return (
-        <TouchableOpacity style={style} onPress={onPress} activeOpacity={activeOpacity}>
-          {children}
-        </TouchableOpacity>
-      );
-    }
-    return <View style={style}>{children}</View>;
   }
-
-  const effectiveBorderWidth = isThinking ? Math.max(borderWidth + 0.8, 2.6) : borderWidth;
-  const driver = animValue || localAnim;
-
-  const layerBOpacity = driver.interpolate({
-    inputRange: [0, 0.33, 0.66, 1],
-    outputRange: [0, 1, 0.25, 0],
-  });
-
-  const layerCOpacity = driver.interpolate({
-    inputRange: [0, 0.33, 0.66, 1],
-    outputRange: [0, 0.25, 1, 0],
-  });
-
-  const fallbackBorderColor = colorAnimValue
-    ? colorAnimValue.interpolate({
-        inputRange: [0, 0.25, 0.5, 0.75, 1],
-        outputRange: [
-          GEMINI_AI_COLORS[0],
-          GEMINI_AI_COLORS[1],
-          GEMINI_AI_COLORS[2],
-          GEMINI_AI_COLORS[3],
-          GEMINI_AI_COLORS[0],
-        ],
-      })
-    : GEMINI_AI_COLORS[0];
-
-  const Component = onPress ? TouchableOpacity : View;
-  const touchProps = onPress ? { onPress, activeOpacity } : {};
-  const halfStroke = effectiveBorderWidth / 2;
-  const rectW = Math.max(0, cardSize.width - effectiveBorderWidth);
-  const rectH = Math.max(0, cardSize.height - effectiveBorderWidth);
-  const rectRx = Math.max(0, borderRadius - halfStroke);
-
-  return (
-    <Component
-      {...touchProps}
-      onLayout={(e) => {
-        const { width: w, height: h } = e.nativeEvent.layout;
-        if (Math.abs(w - cardSize.width) > 0.5 || Math.abs(h - cardSize.height) > 0.5) {
-          setCardSize({ width: w, height: h });
-        }
-      }}
-      style={[
-        style,
-        {
-          position: "relative",
-          borderColor: "transparent",
-          shadowColor: "#9B72CB",
-          shadowOffset: { width: 0, height: 0 },
-          shadowOpacity: isThinking ? 0.48 : 0.22,
-          shadowRadius: isThinking ? 14 : 7,
-          elevation: isThinking ? 7 : 3,
-        },
-      ]}
-    >
-      {children}
-
-      {cardSize.width > 0 && cardSize.height > 0 ? (
-        <View pointerEvents="none" style={StyleSheet.absoluteFillObject}>
-          {/* Base Gemini Multi-Color Layer A */}
-          <Svg width={cardSize.width} height={cardSize.height} style={StyleSheet.absoluteFillObject}>
-            <Defs>
-              <LinearGradient id={`${uid}_a`} x1="0%" y1="0%" x2="100%" y2="100%">
-                <Stop offset="0%" stopColor="#4285F4" />
-                <Stop offset="34%" stopColor="#9B72CB" />
-                <Stop offset="68%" stopColor="#D96570" />
-                <Stop offset="100%" stopColor="#38BDF8" />
-              </LinearGradient>
-            </Defs>
-            <Rect
-              x={halfStroke}
-              y={halfStroke}
-              width={rectW}
-              height={rectH}
-              rx={rectRx}
-              ry={rectRx}
-              fill="none"
-              stroke={`url(#${uid}_a)`}
-              strokeWidth={effectiveBorderWidth}
-            />
-          </Svg>
-
-          {/* Animated Flowing Gemini Layer B */}
-          <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: layerBOpacity }]}>
-            <Svg width={cardSize.width} height={cardSize.height}>
-              <Defs>
-                <LinearGradient id={`${uid}_b`} x1="100%" y1="0%" x2="0%" y2="100%">
-                  <Stop offset="0%" stopColor="#9B72CB" />
-                  <Stop offset="34%" stopColor="#D96570" />
-                  <Stop offset="68%" stopColor="#38BDF8" />
-                  <Stop offset="100%" stopColor="#4285F4" />
-                </LinearGradient>
-              </Defs>
-              <Rect
-                x={halfStroke}
-                y={halfStroke}
-                width={rectW}
-                height={rectH}
-                rx={rectRx}
-                ry={rectRx}
-                fill="none"
-                stroke={`url(#${uid}_b)`}
-                strokeWidth={effectiveBorderWidth}
-              />
-            </Svg>
-          </Animated.View>
-
-          {/* Animated Flowing Gemini Layer C */}
-          <Animated.View style={[StyleSheet.absoluteFillObject, { opacity: layerCOpacity }]}>
-            <Svg width={cardSize.width} height={cardSize.height}>
-              <Defs>
-                <LinearGradient id={`${uid}_c`} x1="0%" y1="100%" x2="100%" y2="0%">
-                  <Stop offset="0%" stopColor="#38BDF8" />
-                  <Stop offset="34%" stopColor="#4285F4" />
-                  <Stop offset="68%" stopColor="#9B72CB" />
-                  <Stop offset="100%" stopColor="#D96570" />
-                </LinearGradient>
-              </Defs>
-              <Rect
-                x={halfStroke}
-                y={halfStroke}
-                width={rectW}
-                height={rectH}
-                rx={rectRx}
-                ry={rectRx}
-                fill="none"
-                stroke={`url(#${uid}_c)`}
-                strokeWidth={effectiveBorderWidth}
-              />
-            </Svg>
-          </Animated.View>
-        </View>
-      ) : (
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            StyleSheet.absoluteFillObject,
-            {
-              borderRadius,
-              borderWidth: effectiveBorderWidth,
-              borderColor: fallbackBorderColor,
-            },
-          ]}
-        />
-      )}
-    </Component>
-  );
+  return <View style={style}>{children}</View>;
 };
 
 export interface AppNotificationItem {
@@ -400,6 +226,54 @@ const TopDownCarGraphic = ({ isDark = false }: { isDark?: boolean }) => {
         <View style={styles.carWheel} />
         <View style={styles.carWheel} />
       </View>
+    </View>
+  );
+};
+
+/**
+ * Motorist Profile Avatar for Location Reviews
+ */
+const ReviewItemAvatar = ({
+  name,
+  avatarUrl,
+  theme,
+}: {
+  name: string;
+  avatarUrl?: string;
+  theme: any;
+}) => {
+  const [imgError, setImgError] = useState(false);
+  const showImage = Boolean(avatarUrl && avatarUrl.trim().length > 0 && !imgError);
+  const initial = (name || "M").trim().charAt(0).toUpperCase();
+
+  return (
+    <View
+      style={{
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: theme.isDark ? "#27272A" : "#F4F4F5",
+        borderWidth: 1,
+        borderColor: theme.border,
+        alignItems: "center",
+        justifyContent: "center",
+        overflow: "hidden",
+      }}
+    >
+      {showImage ? (
+        <Image
+          source={{ uri: avatarUrl }}
+          style={{ width: "100%", height: "100%" }}
+          resizeMode="cover"
+          onError={() => setImgError(true)}
+        />
+      ) : initial && initial !== "V" ? (
+        <Text style={{ fontSize: 13, fontWeight: "700", color: theme.text }}>
+          {initial}
+        </Text>
+      ) : (
+        <Ionicons name="person" size={16} color={theme.text} />
+      )}
     </View>
   );
 };
@@ -568,25 +442,24 @@ export default function Home() {
   const isVehicleElectric =
     selectedVehicle?.vehicle_type === "ev" ||
     driverVehicle?.vehicleType === "ev" ||
-    Boolean(selectedVehicle?.brand?.toLowerCase().includes("tesla")) ||
-    Boolean(selectedVehicle?.brand?.toLowerCase().includes("byd"));
+    (selectedVehicle as any)?.fuel_type === "electric" ||
+    Boolean(selectedVehicle?.brand && /\b(tesla|byd|rivian|lucid|polestar)\b/i.test(selectedVehicle.brand)) ||
+    Boolean(selectedVehicle?.make_model && /\b(tesla|byd|rivian|lucid|polestar|ioniq|leaf|taycan)\b/i.test(selectedVehicle.make_model)) ||
+    Boolean(driverVehicle?.makeModel && /\b(tesla|byd|rivian|lucid|polestar|ioniq|leaf|taycan)\b/i.test(driverVehicle.makeModel)) ||
+    Boolean(driverVehicle?.batteryCapacityKwh && driverVehicle.batteryCapacityKwh > 0);
 
   const isVehicleHandicap =
     selectedVehicle?.vehicle_type === "handicap" ||
     driverVehicle?.parkingPermitType === "Handicap Concession" ||
-    Boolean(selectedVehicle?.handicap_permit_number);
+    Boolean(selectedVehicle?.handicap_permit_number && selectedVehicle.handicap_permit_number.trim().length > 0);
 
   // Details View in-lot search query
   const [detailsSearchQuery, setDetailsSearchQuery] = useState("");
 
-  // Strict Vehicle Eligibility Filter
+  // Vehicle Eligibility: Keep all valid active database locations accessible
   const eligibleLocations: ParkingLocation[] = React.useMemo(() => {
-    return locations.filter((loc) => {
-      if (loc.is_electric_station && !isVehicleElectric) return false;
-      if (loc.is_handicap_facility && !isVehicleHandicap) return false;
-      return true;
-    });
-  }, [locations, isVehicleElectric, isVehicleHandicap]);
+    return locations;
+  }, [locations]);
 
   // Zone filter, interactive spot selection bottom sheet & confirm modal
   const [activeZoneFilter, setActiveZoneFilter] = useState("All zones");
@@ -876,7 +749,12 @@ export default function Home() {
       isOccupied: s.is_occupied,
       spaceType: s.space_type,
       topology: s.topology || (s.space_type === "handicap" ? "wide" : selectedParkForSheet?.layout_topology || "perpendicular"),
-      carColor: s.car_color || resolveParkedCarColor(`${selectedParkForSheet?.id}-${s.zone_code}-${s.space_number}`),
+      carColor:
+        s.car_color ||
+        resolveParkedCarColor(
+          `${selectedParkForSheet?.id}-${s.zone_code}-${s.space_number}`,
+          s.current_vehicle_plate
+        ),
       spotType:
         s.spot_label ||
         (s.space_type === "ev"
@@ -1177,7 +1055,19 @@ export default function Home() {
 
         const resolvedAvatar = cachedAvatar || profileRes?.data?.avatar_url || "";
         setAvatarUrl(resolvedAvatar);
-        setSelectedVehicle(vehicles[0] || null);
+        const activeVeh = vehicles.find((v) => v.is_default) || vehicles[0] || null;
+        setSelectedVehicle(activeVeh);
+        if (vehicles && vehicles.length > 0) {
+          const userColors: string[] = [];
+          const plateMap: Record<string, string> = {};
+          vehicles.forEach((v: any) => {
+            if (v.color) userColors.push(v.color);
+            if (v.plate_number && v.color) {
+              plateMap[v.plate_number.trim().toUpperCase()] = v.color.trim();
+            }
+          });
+          setUserCarColorsCache(userColors, plateMap);
+        }
         setParkingBalance(balance.toLocaleString());
         setRecentParkingsList(history as ParkingHistoryRecord[]);
         setNotificationsList(
@@ -1388,7 +1278,7 @@ export default function Home() {
       const evBill = 9000;
       initiateMobilePayment(evBill).catch(() => {});
       router.push({
-        pathname: "/charging_receipt",
+        pathname: "/ev_charging",
         params: {
           locationId: selectedLocation.id,
           chargerId: selectedSpace.id,
@@ -1775,7 +1665,7 @@ export default function Home() {
       setConfirmBookingSheetVisible(false);
       setSelectedParkForSheet(null);
       router.push({
-        pathname: "/charging_receipt",
+        pathname: "/ev_charging",
         params: {
           locationId: targetLocId,
           name: targetName,
@@ -1788,6 +1678,7 @@ export default function Home() {
           durationMinutes: String(selectedHrs * 60),
           durationSeconds: String(selectedHrs * 3600),
           billAmount: String(evBill),
+          isPaid: "true",
           receiptNumber: `PZ-EV-${Date.now().toString().slice(-4)}`,
         },
       });
@@ -1954,11 +1845,6 @@ export default function Home() {
 
   const visibleSpaces: ParkingSpace[] = useMemo(() => {
     return spaces.filter((sp: ParkingSpace) => {
-      // Non-electric vehicles never see EV bays
-      if (sp.space_type === "ev" && !isVehicleElectric) return false;
-      // Non-handicap vehicles never see handicap bays
-      if (sp.space_type === "handicap" && !isVehicleHandicap) return false;
-
       // In-lot search filter
       if (detailsSearchQuery.trim().length > 0) {
         const q = detailsSearchQuery.toLowerCase().trim();
@@ -1969,7 +1855,7 @@ export default function Home() {
 
       return true;
     });
-  }, [spaces, isVehicleElectric, isVehicleHandicap, detailsSearchQuery]);
+  }, [spaces, detailsSearchQuery]);
 
   const leftColumnSpaces: ParkingSpace[] = visibleSpaces.filter((_: ParkingSpace, idx: number) => idx % 2 === 0);
   const rightColumnSpaces: ParkingSpace[] = visibleSpaces.filter((_: ParkingSpace, idx: number) => idx % 2 === 1);
@@ -2060,15 +1946,6 @@ export default function Home() {
                       : "90° Perpendicular"}
                   </Text>
                 </Text>
-                <View
-                  style={[
-                    styles.adminLockTagHome,
-                    { backgroundColor: theme.isDark ? "#27272A" : "#F4F4F5" },
-                  ]}
-                >
-                  <Ionicons name="lock-closed" size={8} color={theme.textSecondary} />
-                  <Text style={[styles.adminLockTagTextHome, { color: theme.textSecondary }]}>Admin Set</Text>
-                </View>
               </View>
 
               <TouchableOpacity
@@ -2129,6 +2006,16 @@ export default function Home() {
                 {/* Parking Layout 2-Columns */}
                 {loadingSpaces ? (
                   <BayGridSkeleton count={8} />
+                ) : visibleSpaces.length === 0 ? (
+                  <View style={{ paddingVertical: 48, paddingHorizontal: 20, alignItems: "center" }}>
+                    <Ionicons name="grid-outline" size={32} color={theme.textSecondary} />
+                    <Text style={{ fontSize: 14, fontWeight: "600", color: theme.text, marginTop: 10 }}>
+                      No Parking Bays Registered
+                    </Text>
+                    <Text style={{ fontSize: 12, color: theme.textSecondary, textAlign: "center", marginTop: 4 }}>
+                      This facility currently has 0 bays in the database.
+                    </Text>
+                  </View>
                 ) : (
                 <View style={styles.bayLayoutTwoCols}>
                   {/* Left Column */}
@@ -2139,17 +2026,21 @@ export default function Home() {
                       const isHC = sp.space_type === "handicap";
                       const isSlotDisabled = (isEV && !isVehicleElectric) || (isHC && !isVehicleHandicap);
                       const spaceTopo = sp.topology || selectedTopology || "perpendicular";
-                      const skewTransform = spaceTopo === "oblique" ? [{ skewX: "-8deg" }] : [];
 
                       if (sp.is_occupied) {
-                        const carHex = sp.car_color || resolveParkedCarColor(`${selectedLocation?.id}-${sp.zone_code}-${sp.space_number}`);
+                        const carHex =
+                          sp.car_color ||
+                          resolveParkedCarColor(
+                            `${selectedLocation?.id}-${sp.zone_code}-${sp.space_number}`,
+                            sp.current_vehicle_plate
+                          );
                         return (
-                          <View key={sp.id} style={[styles.occupiedBayWrapper, { transform: skewTransform }, spaceTopo === "wide" && { borderWidth: 1.5, borderColor: theme.borderStrong }]}>
+                          <View key={sp.id} style={[styles.occupiedBayWrapper, spaceTopo === "wide" && { borderWidth: 1.5, borderColor: theme.borderStrong }]}>
                             <Text style={[styles.bayLabelMuted, { color: theme.textSecondary }]}>{sp.space_number}</Text>
                             {spaceTopo === "parallel" ? (
-                              <HorizontalUltraRealisticCar color={carHex} width={76} height={38} />
+                              <HorizontalUltraRealisticCar color={carHex} width={68} height={34} />
                             ) : (
-                              <VerticalUltraRealisticCar color={carHex} width={42} height={80} />
+                              <VerticalUltraRealisticCar color={carHex} width={30} height={54} />
                             )}
                           </View>
                         );
@@ -2164,38 +2055,25 @@ export default function Home() {
                               backgroundColor: theme.surface,
                               borderColor: isSelected
                                 ? (isEV ? theme.evGreen : theme.accent)
-                                : isSlotDisabled
-                                  ? "rgba(239, 68, 68, 0.45)"
-                                  : isEV
-                                    ? theme.evGreenBorder
-                                    : isHC
-                                      ? theme.borderStrong
-                                      : theme.border,
-                              borderWidth: isSelected ? 2.5 : 1,
-                              opacity: isSlotDisabled ? 0.55 : 1,
-                              transform: skewTransform,
+                                : theme.border,
+                              borderWidth: isSelected ? 2 : 1,
+                              opacity: isSlotDisabled ? 0.6 : 1,
                             },
                           ]}
                           onPress={() => handleSelectSlot(sp)}
                           activeOpacity={0.8}
                         >
                           <Text style={[styles.freeBaySlotText, { color: theme.text }]}>{sp.space_number}</Text>
-                          {isSlotDisabled && (
-                            <View style={styles.disabledBayBadge}>
-                              <Ionicons name="lock-closed" size={8} color={theme.danger} />
-                              <Text style={styles.disabledBayBadgeText}>{isEV ? "EV ONLY" : "PERMIT REQ"}</Text>
-                            </View>
-                          )}
                           {isEV && (
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 4 }}>
                               <Ionicons name="flash" size={10} color={theme.evGreen} />
-                              <Text style={{ fontSize: 9, fontWeight: "500", color: theme.evGreen }}>EV</Text>
+                              <Text style={{ fontSize: 9, fontWeight: "600", color: theme.evGreen }}>EV</Text>
                             </View>
                           )}
-                          {isHC && (
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 }}>
+                          {isHC && !isEV && (
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 4 }}>
                               <Ionicons name="body" size={10} color={theme.textSecondary} />
-                              <Text style={{ fontSize: 9, fontWeight: "500", color: theme.textSecondary }}>ACCESSIBLE</Text>
+                              <Text style={{ fontSize: 9, fontWeight: "500", color: theme.textSecondary }}>HC</Text>
                             </View>
                           )}
                           {isSelected && (
@@ -2221,17 +2099,21 @@ export default function Home() {
                       const isHC = sp.space_type === "handicap";
                       const isSlotDisabled = (isEV && !isVehicleElectric) || (isHC && !isVehicleHandicap);
                       const spaceTopo = sp.topology || selectedTopology || "perpendicular";
-                      const skewTransform = spaceTopo === "oblique" ? [{ skewX: "8deg" }] : [];
 
                       if (sp.is_occupied) {
-                        const carHex = sp.car_color || resolveParkedCarColor(`${selectedLocation?.id}-${sp.zone_code}-${sp.space_number}`);
+                        const carHex =
+                          sp.car_color ||
+                          resolveParkedCarColor(
+                            `${selectedLocation?.id}-${sp.zone_code}-${sp.space_number}`,
+                            sp.current_vehicle_plate
+                          );
                         return (
-                          <View key={sp.id} style={[styles.occupiedBayWrapper, { transform: skewTransform }, spaceTopo === "wide" && { borderWidth: 1.5, borderColor: theme.borderStrong }]}>
+                          <View key={sp.id} style={[styles.occupiedBayWrapper, spaceTopo === "wide" && { borderWidth: 1.5, borderColor: theme.borderStrong }]}>
                             <Text style={[styles.bayLabelMuted, { color: theme.textSecondary }]}>{sp.space_number}</Text>
                             {spaceTopo === "parallel" ? (
-                              <HorizontalUltraRealisticCar color={carHex} width={76} height={38} />
+                              <HorizontalUltraRealisticCar color={carHex} width={68} height={34} />
                             ) : (
-                              <VerticalUltraRealisticCar color={carHex} width={42} height={80} />
+                              <VerticalUltraRealisticCar color={carHex} width={30} height={54} />
                             )}
                           </View>
                         );
@@ -2245,38 +2127,25 @@ export default function Home() {
                               backgroundColor: theme.surface,
                               borderColor: isSelected
                                 ? (isEV ? theme.evGreen : theme.accent)
-                                : isSlotDisabled
-                                  ? "rgba(239, 68, 68, 0.45)"
-                                  : isEV
-                                    ? theme.evGreenBorder
-                                    : isHC
-                                      ? theme.borderStrong
-                                      : theme.border,
-                              borderWidth: isSelected ? 2.5 : 1,
-                              opacity: isSlotDisabled ? 0.55 : 1,
-                              transform: skewTransform,
+                                : theme.border,
+                              borderWidth: isSelected ? 2 : 1,
+                              opacity: isSlotDisabled ? 0.6 : 1,
                             },
                           ]}
                           onPress={() => handleSelectSlot(sp)}
                           activeOpacity={0.8}
                         >
                           <Text style={[styles.freeBaySlotText, { color: theme.text }]}>{sp.space_number}</Text>
-                          {isSlotDisabled && (
-                            <View style={styles.disabledBayBadge}>
-                              <Ionicons name="lock-closed" size={8} color={theme.danger} />
-                              <Text style={styles.disabledBayBadgeText}>{isEV ? "EV ONLY" : "PERMIT REQ"}</Text>
-                            </View>
-                          )}
                           {isEV && (
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 }}>
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 4 }}>
                               <Ionicons name="flash" size={10} color={theme.evGreen} />
-                              <Text style={{ fontSize: 9, fontWeight: "500", color: theme.evGreen }}>EV</Text>
+                              <Text style={{ fontSize: 9, fontWeight: "600", color: theme.evGreen }}>EV</Text>
                             </View>
                           )}
-                          {isHC && (
-                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 }}>
+                          {isHC && !isEV && (
+                            <View style={{ flexDirection: "row", alignItems: "center", gap: 2, marginTop: 4 }}>
                               <Ionicons name="body" size={10} color={theme.textSecondary} />
-                              <Text style={{ fontSize: 9, fontWeight: "500", color: theme.textSecondary }}>ACCESSIBLE</Text>
+                              <Text style={{ fontSize: 9, fontWeight: "500", color: theme.textSecondary }}>HC</Text>
                             </View>
                           )}
                           {isSelected && (
@@ -2604,21 +2473,12 @@ export default function Home() {
                       style={[styles.reviewCard, { backgroundColor: theme.surface, borderColor: theme.border }]}
                     >
                       <View style={styles.reviewAuthorRow}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                          <View
-                            style={{
-                              width: 34,
-                              height: 34,
-                              borderRadius: 17,
-                              backgroundColor: theme.background,
-                              borderWidth: 1,
-                              borderColor: theme.border,
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                          >
-                            <Ionicons name="person" size={16} color={theme.text} />
-                          </View>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                          <ReviewItemAvatar
+                            name={rev.user_name}
+                            avatarUrl={rev.user_avatar}
+                            theme={theme}
+                          />
                           <View>
                             <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                               <Text style={[styles.reviewAuthorName, { color: theme.text }]}>
@@ -3402,54 +3262,35 @@ export default function Home() {
                 showsHorizontalScrollIndicator={false}
                 contentContainerStyle={styles.nearbyHorizontalCardsScroll}
               >
-                {displayedParkingLocations.map((loc, cardIndex) => {
+                {displayedParkingLocations.map((loc) => {
                   const isEvLot = Boolean(loc.is_electric_station);
                   const isHcLot = Boolean(loc.is_handicap_facility);
                   const isLotDisabled = (isEvLot && !isVehicleElectric) || (isHcLot && !isVehicleHandicap);
-                  const showCardAiBorder = !isEvLot && (isAiMode || isAiThinking);
-                  const bwBorderColor = theme.isDark
-                    ? AI_BW_BORDER_COLORS_DARK[cardIndex % AI_BW_BORDER_COLORS_DARK.length]
-                    : AI_BW_BORDER_COLORS_LIGHT[cardIndex % AI_BW_BORDER_COLORS_LIGHT.length];
 
                   return (
-                    <AnimatedBwGradientCard
+                    <TouchableOpacity
                       key={loc.id}
-                      active={showCardAiBorder}
-                      isThinking={isAiThinking}
-                      borderRadius={18}
-                      borderWidth={2}
-                      animValue={aiBorderRotateAnim}
-                      colorAnimValue={aiBorderColorAnim}
                       style={[
                         styles.nearbyScreenshotCard,
                         {
                           backgroundColor: theme.surface,
-                          borderColor: (isAiMode || isAiThinking)
-                            ? "transparent"
-                            : isLotDisabled
-                              ? "rgba(239, 68, 68, 0.45)"
-                              : isEvLot
-                                ? theme.evGreenBorder
-                                : theme.border,
-                          borderWidth: (isAiMode || isAiThinking) ? 0 : 1,
-                          shadowColor: showCardAiBorder
-                            ? (theme.isDark ? "#FFFFFF" : "#000000")
-                            : theme.cardShadow,
-                          shadowOpacity: showCardAiBorder ? (isAiThinking ? 0.65 : 0.35) : 0.08,
-                          shadowRadius: showCardAiBorder ? (isAiThinking ? 14 : 10) : 4,
-                          opacity: isLotDisabled ? 0.7 : 1,
+                          borderColor: theme.border,
+                          borderWidth: 1,
+                          shadowColor: theme.cardShadow,
+                          shadowOpacity: 0.08,
+                          shadowRadius: 4,
+                          opacity: isLotDisabled ? 0.75 : 1,
                         },
                       ]}
                       onPress={() => {
                         if (isLotDisabled) {
                           Alert.alert(
                             "Restricted Parking Facility",
-                            `This parking facility (${loc.name}) is strictly reserved for ${isEvLot ? "Electric Vehicles (EV)" : "Handicap Permit Holders"}.\n\nUnauthorized parking here incurs an immediate ${isEvLot ? "5,000 RWF" : "10,000 RWF"} Municipal Contravention Fine.\n\nDo you want to proceed and view lots?`,
+                            `This parking facility (${loc.name}) is reserved for ${isEvLot ? "Electric Vehicles (EV)" : "Handicap Permit Holders"}.\n\nDo you want to proceed and view lots?`,
                             [
                               { text: "Cancel", style: "cancel" },
                               {
-                                text: "Proceed (Fine Applies)",
-                                style: "destructive",
+                                text: "Proceed",
                                 onPress: () => {
                                   setSelectedParkForSheet(loc);
                                 },
@@ -3473,7 +3314,7 @@ export default function Home() {
                             <Ionicons name="car-sport-outline" size={32} color={theme.textSecondary} />
                           </View>
                         )}
-                        {/* Free Places Badge on Image */}
+                        {/* Only 1 Clean Badge on Image */}
                         <View style={styles.freePlacesBadge}>
                           <Text style={styles.freePlacesBadgeText}>
                             {isEvLot && isVehicleElectric
@@ -3481,73 +3322,34 @@ export default function Home() {
                               : `${loc.available_spots ?? 0} free places`}
                           </Text>
                         </View>
-                        {/* Zone Badge on Image */}
-                        {loc.zone_code && (
-                          <View style={styles.cardZoneBadge}>
-                            <Text style={styles.cardZoneBadgeText}>{loc.zone_code}</Text>
-                          </View>
-                        )}
-                        {/* EV Charging Station Badge */}
-                        {isEvLot && (
-                          <View
-                            style={[
-                              styles.cardEvStationBadge,
-                              {
-                                backgroundColor: isLotDisabled ? "rgba(239, 68, 68, 0.9)" : theme.evGreen,
-                                borderColor: isLotDisabled ? "rgba(239, 68, 68, 0.9)" : "rgba(255, 255, 255, 0.3)",
-                              },
-                            ]}
-                          >
-                            <Ionicons name={isLotDisabled ? "lock-closed" : "flash"} size={10} color="#FFFFFF" />
-                            <Text style={[styles.cardEvStationBadgeText, { color: "#FFFFFF" }]}>
-                              {isLotDisabled ? "EV ONLY • DISABLED" : "EV ONLY"}
-                            </Text>
-                          </View>
-                        )}
-                        {/* Handicap Accessible Facility Badge */}
-                        {isHcLot && (
-                          <View style={[styles.cardEvStationBadge, { backgroundColor: isLotDisabled ? "rgba(239, 68, 68, 0.9)" : "rgba(9, 9, 11, 0.85)" }]}>
-                            <Ionicons name={isLotDisabled ? "lock-closed" : "body"} size={10} color="#FFFFFF" />
-                            <Text style={[styles.cardEvStationBadgeText, { color: "#FFFFFF" }]}>
-                              {isLotDisabled ? "ACCESSIBLE • DISABLED" : "ACCESSIBLE ONLY"}
-                            </Text>
-                          </View>
-                        )}
-                        {/* Black and White AI Match Badge on Image */}
-                        {isAiMode && (
-                          <View
-                            style={[
-                              styles.geminiCardAiBadge,
-                              {
-                                backgroundColor: theme.isDark ? "#FFFFFF" : "#09090B",
-                                borderColor: theme.isDark ? "#09090B" : "#FFFFFF",
-                                borderWidth: 1,
-                              },
-                            ]}
-                          >
-                            <Ionicons name="sparkles" size={10} color={theme.isDark ? "#09090B" : "#FFFFFF"} />
-                            <Text style={[styles.geminiCardAiBadgeText, { color: theme.isDark ? "#09090B" : "#FFFFFF" }]}>
-                              {cardIndex === 0
-                                ? "TOP AI PICK • BEST VALUE"
-                                : loc.hourly_rate <= previousAverageRate
-                                  ? "CHEAPER THAN USUAL"
-                                  : "AI MATCH"}
-                            </Text>
-                          </View>
-                        )}
                       </View>
 
                       <View style={styles.nearbyCardInfoBox}>
-                        <Text style={[styles.nearbyCardName, { color: theme.text }]} numberOfLines={1}>
-                          {loc.name}
-                        </Text>
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                          <Text style={[styles.nearbyCardName, { color: theme.text, flex: 1, marginRight: 8 }]} numberOfLines={1}>
+                            {loc.name}
+                          </Text>
+                          {loc.zone_code && (
+                            <Text style={{ fontSize: 11, fontWeight: "500", color: theme.textSecondary }}>
+                              {loc.zone_code}
+                            </Text>
+                          )}
+                        </View>
                         <Text style={[styles.nearbyCardAddressText, { color: theme.textSecondary }]} numberOfLines={1}>
                           {loc.address}
                         </Text>
-                        <Text style={[styles.nearbyCardRateText, { color: theme.text }]}>
-                          {loc.hourly_rate} RWF/hour
-                        </Text>
-                        {/* AI Mode Cheap Balances & Savings Breakdown */}
+                        <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 4 }}>
+                          <Text style={[styles.nearbyCardRateText, { color: theme.text }]}>
+                            {loc.hourly_rate} RWF/hour
+                          </Text>
+                          {isEvLot && (
+                            <Text style={{ fontSize: 11, fontWeight: "600", color: theme.evGreen }}>
+                              EV Station
+                            </Text>
+                          )}
+                        </View>
+
+                        {/* AI Mode Estimated Breakdown */}
                         {isAiMode && (
                           <View style={styles.aiBalanceEstimatedRow}>
                             <View
@@ -3561,7 +3363,7 @@ export default function Home() {
                             >
                               <Ionicons name="wallet-outline" size={11} color={theme.text} />
                               <Text style={[styles.aiBalancePillText, { color: theme.text }]}>
-                                AI 2h Bal: {(loc.hourly_rate * 2).toLocaleString()} RWF
+                                Est. 2h: {(loc.hourly_rate * 2).toLocaleString()} RWF
                               </Text>
                             </View>
                             {loc.hourly_rate < previousAverageRate && (
@@ -3581,39 +3383,21 @@ export default function Home() {
                             )}
                           </View>
                         )}
-                        {isEvLot && isVehicleElectric && (
-                          <View style={[styles.evRecommendedPill, { backgroundColor: theme.evGreenSoft, borderWidth: 1, borderColor: theme.evGreenBorder }]}>
-                            <Text style={[styles.evRecommendedPillText, { color: theme.evGreen }]}>Recommended for your EV</Text>
-                          </View>
-                        )}
-                        {isLotDisabled && (
-                          <View style={[styles.evRecommendedPill, { backgroundColor: "rgba(239, 68, 68, 0.12)", borderColor: "rgba(239, 68, 68, 0.3)", borderWidth: 1 }]}>
-                            <Text style={[styles.evRecommendedPillText, { color: theme.danger }]}>
-                              {isEvLot ? "+5,000 RWF Fine for Non-EV" : "+10,000 RWF Fine without Permit"}
-                            </Text>
-                          </View>
-                        )}
                       </View>
-                    </AnimatedBwGradientCard>
+                    </TouchableOpacity>
                   );
                 })}
               </ScrollView>
             )}
 
             {/* DEDICATED EV CHARGING STATIONS SECTION (Rounded Card & Fitted Content) */}
-            <AnimatedBwGradientCard
-              active={false}
-              isThinking={false}
-              borderRadius={20}
-              borderWidth={1}
-              animValue={aiBorderRotateAnim}
-              colorAnimValue={aiBorderColorAnim}
+            <View
               style={[
                 styles.evGatewayCard,
                 {
                   backgroundColor: theme.surface,
-                  borderColor: (isAiMode || isAiThinking) ? "transparent" : theme.evGreenBorder,
-                  borderWidth: (isAiMode || isAiThinking) ? 0 : 1,
+                  borderColor: theme.border,
+                  borderWidth: 1,
                 },
               ]}
             >
@@ -3623,8 +3407,8 @@ export default function Home() {
                     <Text style={[styles.evGatewayTitle, { color: theme.text }]} numberOfLines={1}>
                       {isVehicleElectric ? "EV Mode: All Parkings Available" : "EV Charging Stations"}
                     </Text>
-                    <View style={[styles.evPillBadge, { backgroundColor: theme.evGreenSoft, borderWidth: 1, borderColor: theme.evGreenBorder }]}>
-                      <Text style={[styles.evPillBadgeText, { color: theme.evGreen }]}>{isVehicleElectric ? "All Access" : "EV Only"}</Text>
+                    <View style={[styles.evPillBadge, { backgroundColor: theme.surfaceMuted, borderWidth: 1, borderColor: theme.border }]}>
+                      <Text style={[styles.evPillBadgeText, { color: theme.textSecondary }]}>{isVehicleElectric ? "All Access" : "EV Only"}</Text>
                     </View>
                   </View>
                   <Text style={[styles.evGatewaySubtitle, { color: theme.textSecondary }]} numberOfLines={2}>
@@ -3719,7 +3503,7 @@ export default function Home() {
                   <Ionicons name="arrow-forward" size={14} color={theme.evGreenText} />
                 </TouchableOpacity>
               )}
-            </AnimatedBwGradientCard>
+            </View>
 
             {/* RECENT PARKING SECTION (Matches middle screen in user screenshot) */}
             <View style={styles.recentSectionHeader}>
@@ -3745,35 +3529,21 @@ export default function Home() {
                   </Text>
                 </View>
               ) : (
-                filteredRecentParkings.map((item, index) => {
+                filteredRecentParkings.map((item) => {
                   const isEvRecord = Boolean(
                     item.zoneCode?.toLowerCase().includes("ev") ||
                     item.duration?.toLowerCase().includes("charging") ||
                     item.name?.toLowerCase().includes("ev")
                   );
-                  const showRecentAiBorder = !isEvRecord && (isAiMode || isAiThinking);
                   return (
-                    <AnimatedBwGradientCard
+                    <TouchableOpacity
                       key={item.id}
-                      active={showRecentAiBorder}
-                      isThinking={isAiThinking}
-                      borderRadius={16}
-                      borderWidth={1.5}
-                      animValue={aiBorderRotateAnim}
-                      colorAnimValue={aiBorderColorAnim}
                       style={[
                         styles.recentParkCard,
                         {
                           backgroundColor: theme.surface,
-                          borderColor: (isAiMode || isAiThinking)
-                            ? "transparent"
-                            : isEvRecord
-                              ? theme.evGreenBorder
-                              : theme.border,
-                          borderWidth: (isAiMode || isAiThinking) ? 0 : 1,
-                          shadowColor: showRecentAiBorder ? (theme.isDark ? "#FFFFFF" : "#000000") : theme.cardShadow,
-                          shadowOpacity: showRecentAiBorder ? (isAiThinking ? 0.5 : 0.3) : undefined,
-                          shadowRadius: showRecentAiBorder ? (isAiThinking ? 12 : 8) : undefined,
+                          borderColor: theme.border,
+                          borderWidth: 1,
                         },
                       ]}
                       onPress={() => {
@@ -3817,9 +3587,9 @@ export default function Home() {
                           style={[
                             styles.recentStatusBadge,
                             isEvRecord && {
-                              backgroundColor: theme.evGreenSoft,
+                              backgroundColor: theme.surfaceMuted,
                               borderWidth: 1,
-                              borderColor: theme.evGreenBorder,
+                              borderColor: theme.border,
                             },
                           ]}
                         >
@@ -3828,7 +3598,7 @@ export default function Home() {
                           </Text>
                         </View>
                       </View>
-                    </AnimatedBwGradientCard>
+                    </TouchableOpacity>
                   );
                 })
               )}
@@ -4378,10 +4148,10 @@ export default function Home() {
               <View style={styles.sheetHeaderRow}>
                 <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
                   <Text style={[styles.sheetMainTitle, { color: theme.text }]} numberOfLines={1}>
-                    {selectedParkForSheet?.name || "Parking Facility"}
+                    {sliceAreaName(selectedParkForSheet?.name || "Parking Facility", 24)}
                   </Text>
                   <Text style={[styles.sheetSubTitle, { color: theme.textSecondary }]} numberOfLines={1}>
-                    {selectedParkForSheet?.address || ""}
+                    {sliceAreaName(selectedParkForSheet?.address || "", 30)}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -4403,33 +4173,30 @@ export default function Home() {
                   >
                     {sheetAvailableZones.map((zn) => {
                       const isSelected = selectedSheetZone === zn;
-                      const isZoneDisabled = (zn === "Zone A" && !isVehicleElectric) || (zn === "Zone E" && !isVehicleHandicap);
+                      const isZoneEv = Boolean(selectedParkForSheet?.is_electric_station) && (zn === "Zone A" || zn.toLowerCase().includes("ev"));
+                      const isZoneHc = Boolean(selectedParkForSheet?.is_handicap_facility) || zn === "Zone E";
+                      const isZoneDisabled = (isZoneEv && !isVehicleElectric) || (isZoneHc && !isVehicleHandicap);
                       return (
                         <TouchableOpacity
                           key={zn}
                           style={[
                             styles.sheetZonePill,
                             {
-                              backgroundColor: "transparent",
-                              borderColor: isSelected
-                                ? theme.text
-                                : isZoneDisabled
-                                  ? "rgba(239, 68, 68, 0.45)"
-                                  : theme.border,
-                              borderWidth: isSelected ? 2 : 1,
-                              opacity: isZoneDisabled ? 0.65 : 1,
+                              backgroundColor: isSelected ? theme.pillActiveBg : theme.surface,
+                              borderColor: isSelected ? theme.pillActiveBg : theme.border,
+                              borderWidth: 1,
+                              opacity: isZoneDisabled ? 0.6 : 1,
                             },
                           ]}
                           onPress={() => {
                             if (isZoneDisabled) {
                               Alert.alert(
                                 "Restricted Parking Zone",
-                                `${zn} is strictly designated for ${zn === "Zone A" ? "Electric Vehicles (EV)" : "Handicap Permit Holders"}.\n\nNon-authorized parking in this zone incurs an immediate ${zn === "Zone A" ? "5,000 RWF" : "10,000 RWF"} Municipal Fine.\n\nDo you want to switch to this zone?`,
+                                `${zn} is designated for ${zn === "Zone A" ? "Electric Vehicles (EV)" : "Handicap Permit Holders"}.\n\nDo you want to switch to this zone?`,
                                 [
                                   { text: "Cancel", style: "cancel" },
                                   {
-                                    text: "Select Zone (Fine Applies)",
-                                    style: "destructive",
+                                    text: "Select Zone",
                                     onPress: () => handleSelectSheetZone(zn),
                                   },
                                 ]
@@ -4440,22 +4207,17 @@ export default function Home() {
                           }}
                           activeOpacity={0.8}
                         >
-                          <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
-                            {isZoneDisabled && (
-                              <Ionicons name="lock-closed" size={10} color="#EF4444" />
-                            )}
-                            <Text
-                              style={[
-                                styles.sheetZonePillText,
-                                {
-                                  color: isSelected ? theme.text : isZoneDisabled ? "#EF4444" : theme.textSecondary,
-                                  fontWeight: isSelected ? "600" : "400",
-                                },
-                              ]}
-                            >
-                              {zn}
-                            </Text>
-                          </View>
+                          <Text
+                            style={[
+                              styles.sheetZonePillText,
+                              {
+                                color: isSelected ? theme.pillActiveText : theme.text,
+                                fontWeight: isSelected ? "600" : "500",
+                              },
+                            ]}
+                          >
+                            {zn}
+                          </Text>
                         </TouchableOpacity>
                       );
                     })}
@@ -4466,8 +4228,8 @@ export default function Home() {
               {/* Zone Description Subheader & 2D/3D Aerial Toggle */}
               <View style={{ paddingHorizontal: 20, marginBottom: 12, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                 <View style={{ flex: 1, marginRight: 10 }}>
-                  <Text style={{ fontSize: 13, fontWeight: "500", color: theme.text }}>
-                    {currentSheetLot.title}
+                  <Text style={{ fontSize: 13, fontWeight: "600", color: theme.text }} numberOfLines={1}>
+                    {sliceAreaName(currentSheetLot.title, 22)}
                   </Text>
                   <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 2 }}>
                     {currentSheetLot.description}
@@ -4507,29 +4269,33 @@ export default function Home() {
               </View>
 
               {sheetIs3DView ? (
-                <View style={{ maxHeight: 380, paddingHorizontal: 16 }}>
-                  <AerialParkingLot3D
-                    topology={selectedParkForSheet?.layout_topology || "perpendicular"}
-                    spaces={
-                      selectedSheetZone
-                        ? sheetSpaces.filter((s) => (s.zone_code || "Zone A") === selectedSheetZone)
-                        : sheetSpaces
-                    }
-                    selectedSpaceId={
-                      sheetSpaces.find((s) => s.space_number === selectedSheetBay)?.id || null
-                    }
-                    onSelectSpace={(sp) => {
-                      setSelectedSheetBay(sp.space_number);
-                      if (sp.space_type === "ev" || selectedParkForSheet?.is_electric_station) {
-                        setInspectedSheetSpace(sp);
+                <View style={{ minHeight: 280, marginBottom: 12 }}>
+                  {loadingSheetSpaces ? (
+                    <BayGridSkeleton count={6} />
+                  ) : (
+                    <AerialParkingLot3D
+                      topology={selectedParkForSheet?.layout_topology || "perpendicular"}
+                      spaces={
+                        selectedSheetZone
+                          ? sheetSpaces.filter((s) => (s.zone_code || "Zone A") === selectedSheetZone)
+                          : sheetSpaces
                       }
-                    }}
-                    currentZone={selectedSheetZone || "Zone A"}
-                    locationName={selectedParkForSheet?.name || "Parking Facility"}
-                    lotKind={selectedParkForSheet?.is_electric_station ? "charging" : "parking"}
-                    hideSelectionCard={true}
-                    compact={true}
-                  />
+                      selectedSpaceId={
+                        sheetSpaces.find((s) => s.space_number === selectedSheetBay)?.id || null
+                      }
+                      onSelectSpace={(sp) => {
+                        setSelectedSheetBay(sp.space_number);
+                        if (sp.space_type === "ev" || selectedParkForSheet?.is_electric_station) {
+                          setInspectedSheetSpace(sp);
+                        }
+                      }}
+                      currentZone={selectedSheetZone || "Zone A"}
+                      locationName={selectedParkForSheet?.name || "Parking Facility"}
+                      lotKind={selectedParkForSheet?.is_electric_station ? "charging" : "parking"}
+                      hideSelectionCard={true}
+                      compact={true}
+                    />
+                  )}
                 </View>
               ) : (
               /* 2-Column Bays & Cars Grid */
@@ -4555,8 +4321,9 @@ export default function Home() {
                       .replace(/\b\d+\s*k\s*w\b/gi, "")
                       .replace(/\b(ac|dc)\b/gi, "")
                       .replace(/Covered\s*/gi, "Covered")
+                      .replace(/\bBay\b/gi, "")
                       .trim();
-                    return sanitized || "Standard Bay";
+                    return sanitized || "Standard";
                   };
 
                   return (
@@ -4584,18 +4351,22 @@ export default function Home() {
                                     setInspectedSheetSpace(matchedSp);
                                   } else {
                                     Alert.alert(
-                                      `Bay ${spot.bayNumber} Occupied`,
-                                      "This parking bay is currently occupied by a parked vehicle."
+                                      `Space ${spot.bayNumber} Occupied`,
+                                      "This parking space is currently occupied by a parked vehicle."
                                     );
                                   }
                                 }}
-                                style={styles.occupiedBayGraphicCard}
+                                style={[
+                                  styles.occupiedBayGraphicCard,
+                                  { backgroundColor: theme.surface, borderColor: theme.border },
+                                ]}
                               >
-                                <HorizontalUltraRealisticCar color={spot.carColor} />
+                                <Text style={[styles.bayLabelMuted, { color: theme.textSecondary }]}>{spot.bayNumber}</Text>
+                                <HorizontalUltraRealisticCar color={spot.carColor} width={68} height={34} />
                                 {(spot.spaceType === "ev" || isEvLot) && (
-                                  <View style={{ position: "absolute", bottom: 2, right: 6, flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 }}>
+                                  <View style={styles.chargingBadge}>
                                     <Ionicons name="flash" size={8} color="#10B981" />
-                                    <Text style={{ fontSize: 8, fontWeight: "700", color: "#10B981" }}>CHARGING</Text>
+                                    <Text style={styles.chargingBadgeText}>CHARGING</Text>
                                   </View>
                                 )}
                               </TouchableOpacity>
@@ -4612,16 +4383,12 @@ export default function Home() {
                               style={[
                                 styles.bayAvailableCard,
                                 {
-                                  backgroundColor: "transparent",
+                                  backgroundColor: isSelected ? theme.surfaceMuted : theme.surface,
                                   borderColor: isSelected
                                     ? (isEvSpot ? theme.evGreen : theme.text)
-                                    : isSpotDisabled
-                                      ? "rgba(239, 68, 68, 0.45)"
-                                      : isEvSpot
-                                        ? theme.evGreenBorder
-                                        : theme.border,
-                                  borderWidth: isSelected ? 2.5 : 1,
-                                  opacity: isSpotDisabled ? 0.55 : 1,
+                                    : theme.border,
+                                  borderWidth: isSelected ? 2 : 1,
+                                  opacity: isSpotDisabled ? 0.6 : 1,
                                 },
                               ]}
                               onPress={() => {
@@ -4632,23 +4399,25 @@ export default function Home() {
                               }}
                               activeOpacity={0.8}
                             >
-                              <Text style={[styles.bayNumberBold, { color: theme.text }]}>
-                                {spot.bayNumber}
-                              </Text>
+                              <View style={styles.sheetBayCardHeader}>
+                                <Text style={[styles.bayNumberBold, { color: theme.text }]}>
+                                  {spot.bayNumber}
+                                </Text>
+                                {isSelected ? (
+                                  <View style={[styles.selectedCheckDot, { backgroundColor: isEvSpot ? theme.evGreen : theme.text }]}>
+                                    <Ionicons name="checkmark" size={10} color={isEvSpot ? theme.evGreenText : theme.background} />
+                                  </View>
+                                ) : isEvSpot ? (
+                                  <Ionicons name="flash" size={12} color={theme.evGreen} />
+                                ) : isHcSpot ? (
+                                  <Ionicons name="body" size={12} color={theme.textSecondary} />
+                                ) : (
+                                  <View style={[styles.vacantDotMini, { backgroundColor: theme.borderStrong }]} />
+                                )}
+                              </View>
                               <Text style={[styles.bayStatusSub, { color: isEvSpot && !isSpotDisabled ? theme.evGreen : isSelected ? theme.text : theme.textSecondary }]}>
                                 {formatSpotLabel(spot.spotType)}
                               </Text>
-                              {isSpotDisabled && (
-                                <View style={styles.disabledBayBadge}>
-                                  <Ionicons name="lock-closed" size={8} color="#EF4444" />
-                                  <Text style={styles.disabledBayBadgeText}>{isEvSpot ? "EV ONLY" : "PERMIT REQ"}</Text>
-                                </View>
-                              )}
-                              {isSelected && (
-                                <View style={[styles.selectedCheckDot, { backgroundColor: isEvSpot ? theme.evGreen : theme.text, top: 4, right: 4 }]}>
-                                  <Ionicons name="checkmark" size={10} color={isEvSpot ? theme.evGreenText : theme.background} />
-                                </View>
-                              )}
                             </TouchableOpacity>
                           );
                         })}
@@ -4677,18 +4446,22 @@ export default function Home() {
                                     setInspectedSheetSpace(matchedSp);
                                   } else {
                                     Alert.alert(
-                                      `Bay ${spot.bayNumber} Occupied`,
-                                      "This parking bay is currently occupied by a parked vehicle."
+                                      `Space ${spot.bayNumber} Occupied`,
+                                      "This parking space is currently occupied by a parked vehicle."
                                     );
                                   }
                                 }}
-                                style={styles.occupiedBayGraphicCard}
+                                style={[
+                                  styles.occupiedBayGraphicCard,
+                                  { backgroundColor: theme.surface, borderColor: theme.border },
+                                ]}
                               >
-                                <HorizontalUltraRealisticCar color={spot.carColor} />
+                                <Text style={[styles.bayLabelMuted, { color: theme.textSecondary }]}>{spot.bayNumber}</Text>
+                                <HorizontalUltraRealisticCar color={spot.carColor} width={68} height={34} />
                                 {(spot.spaceType === "ev" || isEvLot) && (
-                                  <View style={{ position: "absolute", bottom: 2, right: 6, flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: "rgba(0,0,0,0.6)", paddingHorizontal: 5, paddingVertical: 1, borderRadius: 6 }}>
+                                  <View style={styles.chargingBadge}>
                                     <Ionicons name="flash" size={8} color="#10B981" />
-                                    <Text style={{ fontSize: 8, fontWeight: "700", color: "#10B981" }}>CHARGING</Text>
+                                    <Text style={styles.chargingBadgeText}>CHARGING</Text>
                                   </View>
                                 )}
                               </TouchableOpacity>
@@ -4705,16 +4478,12 @@ export default function Home() {
                               style={[
                                 styles.bayAvailableCard,
                                 {
-                                  backgroundColor: "transparent",
+                                  backgroundColor: isSelected ? theme.surfaceMuted : theme.surface,
                                   borderColor: isSelected
                                     ? (isEvSpot ? theme.evGreen : theme.text)
-                                    : isSpotDisabled
-                                      ? "rgba(239, 68, 68, 0.45)"
-                                      : isEvSpot
-                                        ? theme.evGreenBorder
-                                        : theme.border,
-                                  borderWidth: isSelected ? 2.5 : 1,
-                                  opacity: isSpotDisabled ? 0.55 : 1,
+                                    : theme.border,
+                                  borderWidth: isSelected ? 2 : 1,
+                                  opacity: isSpotDisabled ? 0.6 : 1,
                                 },
                               ]}
                               onPress={() => {
@@ -4725,23 +4494,25 @@ export default function Home() {
                               }}
                               activeOpacity={0.8}
                             >
-                              <Text style={[styles.bayNumberBold, { color: theme.text }]}>
-                                {spot.bayNumber}
-                              </Text>
+                              <View style={styles.sheetBayCardHeader}>
+                                <Text style={[styles.bayNumberBold, { color: theme.text }]}>
+                                  {spot.bayNumber}
+                                </Text>
+                                {isSelected ? (
+                                  <View style={[styles.selectedCheckDot, { backgroundColor: isEvSpot ? theme.evGreen : theme.text }]}>
+                                    <Ionicons name="checkmark" size={10} color={isEvSpot ? theme.evGreenText : theme.background} />
+                                  </View>
+                                ) : isEvSpot ? (
+                                  <Ionicons name="flash" size={12} color={theme.evGreen} />
+                                ) : isHcSpot ? (
+                                  <Ionicons name="body" size={12} color={theme.textSecondary} />
+                                ) : (
+                                  <View style={[styles.vacantDotMini, { backgroundColor: theme.borderStrong }]} />
+                                )}
+                              </View>
                               <Text style={[styles.bayStatusSub, { color: isEvSpot && !isSpotDisabled ? theme.evGreen : isSelected ? theme.text : theme.textSecondary }]}>
                                 {formatSpotLabel(spot.spotType)}
                               </Text>
-                              {isSpotDisabled && (
-                                <View style={styles.disabledBayBadge}>
-                                  <Ionicons name="lock-closed" size={8} color="#EF4444" />
-                                  <Text style={styles.disabledBayBadgeText}>{isEvSpot ? "EV ONLY" : "PERMIT REQ"}</Text>
-                                </View>
-                              )}
-                              {isSelected && (
-                                <View style={[styles.selectedCheckDot, { backgroundColor: isEvSpot ? theme.evGreen : theme.text, top: 4, right: 4 }]}>
-                                  <Ionicons name="checkmark" size={10} color={isEvSpot ? theme.evGreenText : theme.background} />
-                                </View>
-                              )}
                             </TouchableOpacity>
                           );
                         })}
@@ -4753,16 +4524,52 @@ export default function Home() {
               )}
 
               {/* Sticky Continue Button with Circle Arrow */}
-              <TouchableOpacity
-                style={styles.sheetContinueBtn}
-                onPress={() => setConfirmBookingSheetVisible(true)}
-                activeOpacity={0.88}
-              >
-                <Text style={styles.sheetContinueBtnText}>Continue</Text>
-                <View style={styles.sheetContinueCircleArrow}>
-                  <Ionicons name="arrow-forward" size={18} color="#09090B" />
-                </View>
-              </TouchableOpacity>
+              {(() => {
+                const matched = sheetSpaces.find((s) => s.space_number === selectedSheetBay);
+                const isEvBay = matched?.space_type === "ev" || Boolean(selectedParkForSheet?.is_electric_station);
+                const canChargeImmediately = isEvBay && isVehicleElectric;
+
+                return (
+                  <TouchableOpacity
+                    style={[styles.sheetContinueBtn, canChargeImmediately && { backgroundColor: theme.evGreen }]}
+                    onPress={() => {
+                      if (canChargeImmediately) {
+                        const activePlate = selectedVehicle?.plate_number || driverVehicle?.plateNumber || "";
+                        const kw = matched?.watt_power_kw || 120;
+                        setSelectedParkForSheet(null);
+                        router.push({
+                          pathname: "/ev_charging",
+                          params: {
+                            locationId: selectedParkForSheet?.id || "",
+                            name: selectedParkForSheet?.name || "EV Charging Station",
+                            bayNumber: selectedSheetBay || "EV-01",
+                            plate: activePlate,
+                            powerKw: String(kw),
+                            soc: String(driverVehicle?.batteryLevelPercent || 25),
+                            isPaid: "true",
+                            billAmount: "9000",
+                            currency: "RWF",
+                          },
+                        });
+                      } else {
+                        setConfirmBookingSheetVisible(true);
+                      }
+                    }}
+                    activeOpacity={0.88}
+                  >
+                    <Text style={[styles.sheetContinueBtnText, canChargeImmediately && { color: theme.evGreenText }]}>
+                      {canChargeImmediately ? "Charge Immediately" : "Continue"}
+                    </Text>
+                    <View style={[styles.sheetContinueCircleArrow, canChargeImmediately && { backgroundColor: theme.surface }]}>
+                      <Ionicons
+                        name={canChargeImmediately ? "flash" : "arrow-forward"}
+                        size={18}
+                        color={canChargeImmediately ? theme.evGreen : "#09090B"}
+                      />
+                    </View>
+                  </TouchableOpacity>
+                );
+              })()}
 
               {/* EV Bay Detail Inspection Modal */}
               {inspectedSheetSpace && selectedParkForSheet && (
@@ -4774,7 +4581,27 @@ export default function Home() {
                   onStartCharging={(details) => {
                     setInspectedSheetSpace(null);
                     setSelectedSheetBay(details.bayNumber);
-                    setConfirmBookingSheetVisible(true);
+                    if (isVehicleElectric) {
+                      const activePlate = selectedVehicle?.plate_number || driverVehicle?.plateNumber || "";
+                      const kw = inspectedSheetSpace.watt_power_kw || details.maxKw || 120;
+                      setSelectedParkForSheet(null);
+                      router.push({
+                        pathname: "/ev_charging",
+                        params: {
+                          locationId: selectedParkForSheet.id,
+                          name: selectedParkForSheet.name,
+                          bayNumber: details.bayNumber,
+                          plate: activePlate,
+                          powerKw: String(kw),
+                          soc: String(driverVehicle?.batteryLevelPercent || 25),
+                          isPaid: "true",
+                          billAmount: "9000",
+                          currency: "RWF",
+                        },
+                      });
+                    } else {
+                      setConfirmBookingSheetVisible(true);
+                    }
                   }}
                 />
               )}
@@ -4812,13 +4639,14 @@ export default function Home() {
               </View>
 
               {(() => {
+                const selectedSpaceObj = sheetSpaces.find((s) => s.space_number === selectedSheetBay);
                 const isConfirmEv =
-                  selectedSheetZone === "Zone A" ||
-                  Boolean(selectedParkForSheet?.is_electric_station) ||
+                  selectedSpaceObj?.space_type === "ev" ||
+                  (Boolean(selectedParkForSheet?.is_electric_station) && selectedSpaceObj?.space_type !== "regular" && selectedSpaceObj?.space_type !== "handicap") ||
                   selectedSheetBay.toLowerCase().startsWith("ev");
                 const isConfirmHc =
-                  selectedSheetZone === "Zone E" ||
-                  Boolean(selectedParkForSheet?.is_handicap_facility) ||
+                  selectedSpaceObj?.space_type === "handicap" ||
+                  (Boolean(selectedParkForSheet?.is_handicap_facility) && selectedSpaceObj?.space_type !== "regular" && selectedSpaceObj?.space_type !== "ev") ||
                   selectedSheetBay.toLowerCase().startsWith("h");
                 const isEvChargingSession = isConfirmEv && isVehicleElectric;
                 const confirmFineAmount = (isConfirmEv && !isVehicleElectric) ? 5000 : (isConfirmHc && !isVehicleHandicap) ? 10000 : 0;
@@ -5357,21 +5185,23 @@ export default function Home() {
                     <View
                       style={[
                         styles.scannedStatusPill,
-                        isScannedDisabled
-                          ? { backgroundColor: "rgba(239, 68, 68, 0.2)" }
-                          : isEvSpot
-                            ? { backgroundColor: "rgba(16, 185, 129, 0.22)", borderColor: "rgba(16, 185, 129, 0.45)", borderWidth: 1 }
-                            : null,
+                        {
+                          backgroundColor: theme.surfaceMuted,
+                          borderWidth: 1,
+                          borderColor: theme.border,
+                        },
                       ]}
                     >
                       <Text
                         style={[
                           styles.scannedStatusPillText,
-                          isScannedDisabled
-                            ? { color: "#EF4444" }
-                            : isEvSpot
-                              ? { color: theme.evGreen }
-                              : null,
+                          {
+                            color: isScannedDisabled
+                              ? theme.textSecondary
+                              : isEvSpot
+                                ? theme.evGreen
+                                : theme.text,
+                          },
                         ]}
                       >
                         {isScannedDisabled ? "RESTRICTED" : isEvSpot ? "EV Charger" : "Available"}
@@ -5380,9 +5210,9 @@ export default function Home() {
                   </View>
 
                   {isScannedDisabled && (
-                    <View style={{ backgroundColor: "rgba(239, 68, 68, 0.15)", borderRadius: 10, padding: 8, marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: "rgba(239, 68, 68, 0.3)" }}>
-                      <Ionicons name="warning" size={16} color="#EF4444" />
-                      <Text style={{ color: "#EF4444", fontSize: 11, fontWeight: "500", flex: 1 }}>
+                    <View style={{ backgroundColor: theme.surfaceMuted, borderRadius: 10, padding: 8, marginTop: 8, flexDirection: "row", alignItems: "center", gap: 6, borderWidth: 1, borderColor: theme.border }}>
+                      <Ionicons name="alert-circle-outline" size={16} color={theme.textSecondary} />
+                      <Text style={{ color: theme.textSecondary, fontSize: 11, fontWeight: "500", flex: 1 }}>
                         +{scanFine.toLocaleString()} RWF Municipal Fine Applied ({scanFineReason})
                       </Text>
                     </View>
@@ -5391,7 +5221,7 @@ export default function Home() {
                   <View style={styles.scannedDetailsRow}>
                     <Text style={[styles.scannedRateText, isEvSpot && isVehicleElectric && { color: theme.evGreen }]}>
                       {isEvSpot && isVehicleElectric
-                        ? "EV Charge: 9k (<30m) / 10k RWF (≥30m) • 0 Park"
+                        ? "EV Charge: 250 RWF / kWh"
                         : `${scannedSpaceInfo.hourlyRate} RWF / hour (Parking)`}
                     </Text>
                     <Text style={styles.scannedTokenText}>Code: {scannedSpaceInfo.token}</Text>
@@ -5627,8 +5457,8 @@ export default function Home() {
                       );
                     })}
 
-                {/* Rate Bubble Markers for EV Stations: Shown strictly for EV vehicles in 'ev' or 'all' mode */}
-                {isVehicleElectric && (mapCategory === "all" || mapCategory === "ev") &&
+                {/* Rate Bubble Markers for EV Stations: Shown in 'ev' mode or for electric vehicles */}
+                {(mapCategory === "ev" || (isVehicleElectric && mapCategory === "all")) &&
                   evStations
                     .filter((ev) => {
                       if (!mapSearch) return true;
@@ -5675,8 +5505,8 @@ export default function Home() {
                               style={[
                                 styles.rateBubble,
                                 {
-                                  backgroundColor: isSelected ? theme.evGreen : theme.surface,
-                                  borderColor: theme.evGreen,
+                                  backgroundColor: isSelected ? theme.pillActiveBg : theme.surface,
+                                  borderColor: isSelected ? theme.pillActiveBg : theme.borderStrong,
                                   borderWidth: 1.5,
                                   flexDirection: "row",
                                   alignItems: "center",
@@ -5688,13 +5518,13 @@ export default function Home() {
                               <Ionicons
                                 name="flash"
                                 size={12}
-                                color={isSelected ? theme.evGreenText : theme.evGreen}
+                                color={isSelected ? theme.pillActiveText : theme.text}
                               />
                               <Text
                                 style={[
                                   styles.rateBubbleText,
                                   {
-                                    color: isSelected ? theme.evGreenText : theme.evGreen,
+                                    color: isSelected ? theme.pillActiveText : theme.text,
                                     fontWeight: "700",
                                   },
                                 ]}
@@ -5706,7 +5536,7 @@ export default function Home() {
                               style={[
                                 styles.pinStemDot,
                                 {
-                                  backgroundColor: theme.evGreen,
+                                  backgroundColor: isSelected ? theme.pillActiveBg : theme.textSecondary,
                                   borderColor: theme.surface,
                                 },
                               ]}
@@ -5797,20 +5627,16 @@ export default function Home() {
                     paddingHorizontal: 6,
                     paddingVertical: 2,
                     borderRadius: 8,
-                    backgroundColor: isVehicleElectric && mapCategory !== "car"
-                      ? theme.evGreenSoft
-                      : theme.surface,
+                    backgroundColor: theme.surfaceMuted,
                     borderWidth: 1,
-                    borderColor: isVehicleElectric && mapCategory !== "car"
-                      ? theme.evGreenBorder
-                      : theme.border,
+                    borderColor: theme.border,
                   }}
                 >
                   <Text
                     style={{
                       fontSize: 8,
                       fontWeight: "700",
-                      color: isVehicleElectric && mapCategory !== "car" ? theme.evGreen : theme.textSecondary,
+                      color: theme.textSecondary,
                     }}
                   >
                     {isVehicleElectric
@@ -5854,13 +5680,11 @@ export default function Home() {
                         styles.categoryPill,
                         {
                           backgroundColor: isActive
-                            ? (isEvCat ? theme.evGreen : theme.pillActiveBg)
+                            ? theme.pillActiveBg
                             : theme.surface,
                           borderColor: isActive
-                            ? (isEvCat ? theme.evGreen : theme.pillActiveBg)
-                            : isEvCat
-                              ? theme.evGreenBorder
-                              : theme.border,
+                            ? theme.pillActiveBg
+                            : theme.border,
                           shadowColor: theme.cardShadow,
                         },
                       ]}
@@ -5952,35 +5776,37 @@ export default function Home() {
             </View>
 
             {/* Floating "See All Areas" City Overview Button on Map */}
-            <TouchableOpacity
-              style={{
-                position: "absolute",
-                right: 16,
-                bottom: selectedMapLocation ? 250 : insets.bottom + 20,
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-                backgroundColor: theme.surface,
-                borderColor: theme.border,
-                borderWidth: 1,
-                paddingHorizontal: 14,
-                paddingVertical: 9,
-                borderRadius: 20,
-                shadowColor: theme.cardShadow,
-                shadowOffset: { width: 0, height: 3 },
-                shadowOpacity: 0.25,
-                shadowRadius: 5,
-                elevation: 5,
-                zIndex: 10,
-              }}
-              onPress={handleViewAllAreas}
-              activeOpacity={0.8}
-            >
-              <Ionicons name="scan-outline" size={15} color={theme.text} />
-              <Text style={{ fontSize: 11, fontWeight: "700", color: theme.text }}>
-                See All Areas
-              </Text>
-            </TouchableOpacity>
+            {!selectedMapLocation && (
+              <TouchableOpacity
+                style={{
+                  position: "absolute",
+                  right: 16,
+                  bottom: insets.bottom + 20,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  backgroundColor: theme.surface,
+                  borderColor: theme.border,
+                  borderWidth: 1,
+                  paddingHorizontal: 14,
+                  paddingVertical: 9,
+                  borderRadius: 20,
+                  shadowColor: theme.cardShadow,
+                  shadowOffset: { width: 0, height: 3 },
+                  shadowOpacity: 0.25,
+                  shadowRadius: 5,
+                  elevation: 5,
+                  zIndex: 10,
+                }}
+                onPress={handleViewAllAreas}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="scan-outline" size={15} color={theme.text} />
+                <Text style={{ fontSize: 11, fontWeight: "700", color: theme.text }}>
+                  See All Areas
+                </Text>
+              </TouchableOpacity>
+            )}
 
             {/* Floating Bottom Card matching the user's screenshot */}
             {selectedMapLocation && (
@@ -5994,9 +5820,9 @@ export default function Home() {
                   },
                 ]}
               >
-                {/* Header Row: Title, Address, Bookmark */}
+                {/* Header Row: Title, Address, Bookmark & Close */}
                 <View style={styles.bottomCardHeaderRow}>
-                  <View style={{ flex: 1, paddingRight: 10 }}>
+                  <View style={{ flex: 1, minWidth: 0, paddingRight: 8 }}>
                     <Text style={[styles.bottomCardTitle, { color: theme.text }]} numberOfLines={1}>
                       {selectedMapLocation.name}
                     </Text>
@@ -6005,30 +5831,46 @@ export default function Home() {
                     </Text>
                   </View>
 
-                  <TouchableOpacity
-                    style={[
-                      styles.bookmarkBtn,
-                      {
-                        backgroundColor: mapBookmarked[selectedMapLocation.id]
-                          ? theme.pillActiveBg
-                          : theme.background,
-                        borderColor: theme.border,
-                      },
-                    ]}
-                    onPress={() =>
-                      setMapBookmarked((prev) => ({
-                        ...prev,
-                        [selectedMapLocation.id]: !prev[selectedMapLocation.id],
-                      }))
-                    }
-                    activeOpacity={0.8}
-                  >
-                    <Ionicons
-                      name={mapBookmarked[selectedMapLocation.id] ? "bookmark" : "bookmark-outline"}
-                      size={20}
-                      color={mapBookmarked[selectedMapLocation.id] ? theme.pillActiveText : theme.text}
-                    />
-                  </TouchableOpacity>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                    <TouchableOpacity
+                      style={[
+                        styles.bookmarkBtn,
+                        {
+                          backgroundColor: mapBookmarked[selectedMapLocation.id]
+                            ? theme.pillActiveBg
+                            : theme.background,
+                          borderColor: theme.border,
+                        },
+                      ]}
+                      onPress={() =>
+                        setMapBookmarked((prev) => ({
+                          ...prev,
+                          [selectedMapLocation.id]: !prev[selectedMapLocation.id],
+                        }))
+                      }
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons
+                        name={mapBookmarked[selectedMapLocation.id] ? "bookmark" : "bookmark-outline"}
+                        size={17}
+                        color={mapBookmarked[selectedMapLocation.id] ? theme.pillActiveText : theme.text}
+                      />
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.bookmarkBtn,
+                        {
+                          backgroundColor: theme.background,
+                          borderColor: theme.border,
+                        },
+                      ]}
+                      onPress={() => setSelectedMapLocation(null)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="close" size={17} color={theme.text} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
 
                 {/* Stats Row: Price • 4 min • Available Spots */}
@@ -6036,34 +5878,34 @@ export default function Home() {
                   <View style={styles.statBadgeItem}>
                     <Ionicons
                       name={selectedMapLocation.is_electric_station && isVehicleElectric ? "flash" : "cash-outline"}
-                      size={14}
+                      size={13}
                       color={selectedMapLocation.is_electric_station && isVehicleElectric ? theme.evGreen : theme.textSecondary}
                     />
-                    <Text style={[styles.statBadgeText, { color: theme.text }]}>
+                    <Text style={[styles.statBadgeText, { color: theme.text }]} numberOfLines={1}>
                       {selectedMapLocation.is_electric_station && isVehicleElectric
-                        ? "EV Charge: 9k / 10k RWF"
-                        : `${selectedMapLocation.hourly_rate || 300} RWF /hr`}
+                        ? "250 RWF/kWh"
+                        : `${selectedMapLocation.hourly_rate || 300} RWF/hr`}
                     </Text>
                   </View>
                   <Text style={[styles.statDotSeparator, { color: theme.textSecondary }]}>•</Text>
                   <View style={styles.statBadgeItem}>
-                    <Ionicons name="time-outline" size={14} color={theme.textSecondary} />
-                    <Text style={[styles.statBadgeText, { color: theme.text }]}>
+                    <Ionicons name="time-outline" size={13} color={theme.textSecondary} />
+                    <Text style={[styles.statBadgeText, { color: theme.text }]} numberOfLines={1}>
                       4 min
                     </Text>
                   </View>
                   <Text style={[styles.statDotSeparator, { color: theme.textSecondary }]}>•</Text>
-                  <View style={styles.statBadgeItem}>
+                  <View style={[styles.statBadgeItem, { flexShrink: 1 }]}>
                     <Ionicons
                       name={selectedMapLocation.is_electric_station && isVehicleElectric ? "flash" : "car-outline"}
-                      size={14}
+                      size={13}
                       color={selectedMapLocation.is_electric_station && isVehicleElectric ? theme.evGreen : theme.textSecondary}
                     />
-                    <Text style={[styles.statBadgeText, { color: theme.text, fontWeight: "700" }]}>
+                    <Text style={[styles.statBadgeText, { color: theme.text, fontWeight: "700" }]} numberOfLines={1}>
                       {selectedMapLocation.available_spots ?? 0}{" "}
                       {selectedMapLocation.is_electric_station && isVehicleElectric
-                        ? "Charging Spots Available"
-                        : "Parking Spots Available"}
+                        ? "spots"
+                        : "spots free"}
                     </Text>
                   </View>
                 </View>
@@ -6129,6 +5971,8 @@ export default function Home() {
                   >
                     {selectedMapLocation.is_electric_station && isVehicleElectric
                       ? "Select Charging Spot"
+                      : selectedMapLocation.is_handicap_facility
+                      ? "Select Accessible Spot"
                       : "Select Parking Spot"}
                   </Text>
                 </TouchableOpacity>
@@ -6151,10 +5995,10 @@ export default function Home() {
               <View style={styles.sheetHeaderRow}>
                 <View style={{ flex: 1, minWidth: 0, marginRight: 12 }}>
                   <Text style={[styles.sheetMainTitle, { color: theme.text }]} numberOfLines={1}>
-                    {selectedMapLocation?.name || "Parking Station"}
+                    {sliceAreaName(selectedMapLocation?.name || "Parking Station", 24)}
                   </Text>
                   <Text style={[styles.sheetSubTitle, { color: theme.textSecondary }]} numberOfLines={1}>
-                    {selectedMapLocation?.address || ""}
+                    {sliceAreaName(selectedMapLocation?.address || "", 30)}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -6468,7 +6312,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   occupiedBayWrapper: {
-    height: 80,
+    height: 84,
     borderRadius: 14,
     backgroundColor: "transparent",
     alignItems: "center",
@@ -6477,13 +6321,14 @@ const styles = StyleSheet.create({
   },
   bayLabelMuted: {
     position: "absolute",
-    top: 6,
-    left: 8,
-    fontSize: 10,
-    fontWeight: "500",
+    top: 8,
+    left: 10,
+    fontSize: 11,
+    fontWeight: "700",
+    zIndex: 2,
   },
   freeBaySlot: {
-    height: 80,
+    height: 84,
     borderRadius: 14,
     alignItems: "center",
     justifyContent: "center",
@@ -7326,22 +7171,22 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "rgba(239, 68, 68, 0.15)",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
     borderWidth: 1,
-    borderColor: "rgba(239, 68, 68, 0.4)",
+    borderColor: "#3F3F46",
     borderRadius: 12,
     paddingHorizontal: 12,
     paddingVertical: 8,
     marginBottom: 12,
   },
   contraventionFineTitle: {
-    color: "#EF4444",
+    color: "#E4E4E7",
     fontSize: 11,
     fontWeight: "500",
     letterSpacing: 0.3,
   },
   contraventionFineSub: {
-    color: "#FCA5A5",
+    color: "#A1A1AA",
     fontSize: 10,
     fontWeight: "400",
     marginTop: 1,
@@ -7350,20 +7195,20 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
-    backgroundColor: "rgba(239, 68, 68, 0.1)",
+    backgroundColor: "rgba(255, 255, 255, 0.04)",
     borderWidth: 1,
-    borderColor: "rgba(239, 68, 68, 0.3)",
+    borderColor: "#3F3F46",
     borderRadius: 14,
     padding: 12,
     marginBottom: 14,
   },
   sheetFineWarningTitle: {
-    color: "#EF4444",
+    color: "#E4E4E7",
     fontSize: 12,
     fontWeight: "500",
   },
   sheetFineWarningSub: {
-    color: "#EF4444",
+    color: "#A1A1AA",
     fontSize: 11,
     fontWeight: "400",
     marginTop: 2,
@@ -7860,26 +7705,57 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   bayAvailableCard: {
-    height: 60,
-    borderRadius: 16,
+    height: 84,
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    justifyContent: "space-between",
+  },
+  sheetBayCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    width: "100%",
+  },
+  vacantDotMini: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  bayNumberBold: {
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
+  bayStatusSub: {
+    fontSize: 10.5,
+    fontWeight: "500",
+  },
+  occupiedBayGraphicCard: {
+    height: 84,
+    borderRadius: 14,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
+    position: "relative",
   },
-  bayNumberBold: {
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  bayStatusSub: {
-    fontSize: 10,
-    fontWeight: "400",
-    marginTop: 1,
-  },
-  occupiedBayGraphicCard: {
-    height: 60,
-    borderRadius: 16,
+  chargingBadge: {
+    position: "absolute",
+    bottom: 6,
+    right: 8,
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    gap: 3,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  chargingBadgeText: {
+    fontSize: 8.5,
+    fontWeight: "700",
+    color: "#10B981",
   },
   sheetContinueBtn: {
     backgroundColor: "#18181B",
@@ -8600,11 +8476,11 @@ const styles = StyleSheet.create({
   },
   screenshotBottomCard: {
     position: "absolute",
-    bottom: Platform.OS === "ios" ? 34 : 20,
+    bottom: Platform.OS === "ios" ? 28 : 16,
     left: 16,
     right: 16,
-    borderRadius: 24,
-    padding: 18,
+    borderRadius: 22,
+    padding: 14,
     borderWidth: 1,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 8 },
@@ -8616,21 +8492,21 @@ const styles = StyleSheet.create({
   bottomCardHeaderRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
   },
   bottomCardTitle: {
-    fontSize: 19,
+    fontSize: 17,
     fontWeight: "700",
     letterSpacing: -0.3,
   },
   bottomCardAddress: {
     fontSize: 12,
-    marginTop: 3,
+    marginTop: 2,
   },
   bookmarkBtn: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
@@ -8638,14 +8514,15 @@ const styles = StyleSheet.create({
   cardStatsRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 12,
-    marginBottom: 12,
+    marginTop: 10,
+    marginBottom: 10,
     gap: 8,
   },
   statBadgeItem: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
+    minWidth: 0,
   },
   statBadgeText: {
     fontSize: 12,
@@ -8653,10 +8530,10 @@ const styles = StyleSheet.create({
   },
   statDotSeparator: {
     color: "#A1A1AA",
-    fontSize: 12,
+    fontSize: 11,
   },
   aerialPhotoContainer: {
-    height: 125,
+    height: 110,
     borderRadius: 14,
     overflow: "hidden",
     position: "relative",
@@ -8687,11 +8564,11 @@ const styles = StyleSheet.create({
   },
   choosePlaceBtn: {
     backgroundColor: "#09090B",
-    height: 48,
-    borderRadius: 24,
+    height: 44,
+    borderRadius: 22,
     alignItems: "center",
     justifyContent: "center",
-    marginTop: 14,
+    marginTop: 12,
     shadowColor: "rgba(0, 0, 0, 0.25)",
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -8700,7 +8577,7 @@ const styles = StyleSheet.create({
   },
   choosePlaceBtnText: {
     color: "#FFFFFF",
-    fontSize: 16,
+    fontSize: 13,
     fontWeight: "600",
   },
   cardZoneBadge: {

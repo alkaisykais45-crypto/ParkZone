@@ -122,7 +122,7 @@ Respond ONLY with a JSON object in this exact format:
  */
 export async function getGeminiParkingRecommendation(
   locations: any[],
-  vehicleSpecs: { isElectric: boolean; makeModel: string; plateNumber: string },
+  vehicleSpecs: { isElectric: boolean; makeModel: string; plateNumber: string; hasHandicapPermit?: boolean },
   preferences: { maxRate?: number; requireFastCharger?: boolean }
 ): Promise<{ recommendedLocationId: string | null; rationale: string }> {
   const apiKey = getGeminiApiKey();
@@ -178,8 +178,10 @@ Respond ONLY with JSON:
 
   // Default algorithmic selection
   const candidate = locations.find((l) =>
-    vehicleSpecs.isElectric ? l.is_electric_station && l.available_spots > 0 : l.available_spots > 0
-  ) || locations[0];
+    vehicleSpecs.isElectric
+      ? l.is_electric_station && l.available_spots > 0
+      : !l.is_electric_station && (!l.is_handicap_facility || vehicleSpecs.hasHandicapPermit) && l.available_spots > 0
+  ) || locations.find((l) => l.available_spots > 0) || locations[0];
 
   return {
     recommendedLocationId: candidate ? candidate.id : null,

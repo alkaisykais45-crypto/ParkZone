@@ -59,8 +59,16 @@ let isInitialized = false;
 
 export function mapDbRowToSpecs(row: any): DriverVehicleSpecs {
   if (!row) return EMPTY_VEHICLE_SPECS;
-  const isEv = row.vehicle_type === "ev";
-  const cap = Number(row.battery_capacity_kwh) || 0;
+  const isEv =
+    row.vehicle_type === "ev" ||
+    row.fuel_type === "electric" ||
+    Boolean(row.battery_capacity_kwh && Number(row.battery_capacity_kwh) > 0) ||
+    Boolean(row.make_model && /\b(tesla|byd|rivian|lucid|polestar|ioniq|leaf|taycan)\b/i.test(row.make_model)) ||
+    Boolean(row.brand && /\b(tesla|byd|rivian|lucid|polestar)\b/i.test(row.brand));
+  const isHandicap =
+    row.vehicle_type === "handicap" ||
+    Boolean(row.handicap_permit_number && String(row.handicap_permit_number).trim().length > 0);
+  const cap = Number(row.battery_capacity_kwh) || (isEv ? 75 : 0);
   const lvl =
     row.battery_level_percent !== undefined && row.battery_level_percent !== null
       ? Number(row.battery_level_percent)
@@ -81,7 +89,7 @@ export function mapDbRowToSpecs(row: any): DriverVehicleSpecs {
     batteryCapacityKwh: cap,
     batteryLevelPercent: lvl,
     estimatedRangeKm: isEv ? Math.round((lvl / 100) * (cap || 75) * 5.2) : 0,
-    parkingPermitType: row.handicap_permit_number
+    parkingPermitType: isHandicap
       ? "Handicap Concession"
       : isEv
       ? "EV Priority"

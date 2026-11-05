@@ -38,7 +38,6 @@ import {
   fetchActiveParkingTicket,
   fetchUserParkingHistory,
   fetchUserVehicles,
-  resolveSpaceImageUrl,
   ParkingHistoryRecord,
 } from "../services/parking";
 import { initiateMobilePayment } from "../services/mobilePayment";
@@ -307,10 +306,7 @@ const Activities = () => {
           imageUrl:
             sp?.image_url?.trim() ||
             loc?.image_url?.trim() ||
-            resolveSpaceImageUrl(
-              `${loc?.id || loc?.name || "lot"}-${sp?.space_number || liveTicket.id}`,
-              sp?.space_type || "regular"
-            ),
+            undefined,
           durationHours: derivedHours,
           hourlyRate,
           receiptNumber: liveTicket.ticket_number,
@@ -346,10 +342,7 @@ const Activities = () => {
             const fineSpaceImage =
               sp?.image_url?.trim() ||
               loc?.image_url?.trim() ||
-              resolveSpaceImageUrl(
-                `${loc?.id || loc?.name || "fine"}-${sp?.space_number || f.id}`,
-                sp?.space_type || "regular"
-              );
+              undefined;
             const isPaid = f.payment_status === "paid";
             mergedRecords.push({
               id: f.id,
@@ -788,7 +781,7 @@ const Activities = () => {
           styles.historyCard,
           {
             backgroundColor: theme.surface,
-            borderColor: isEvSession ? theme.evGreenBorder : theme.border,
+            borderColor: theme.border,
             shadowColor: theme.cardShadow,
           },
         ]}
@@ -832,13 +825,11 @@ const Activities = () => {
               style={[
                 styles.historyStatusPill,
                 {
-                  backgroundColor: isEvSession
-                    ? theme.evGreenSoft
-                    : isCompleted
-                      ? theme.pillInactiveBg
-                      : theme.pillActiveBg,
-                  borderWidth: isEvSession ? 1 : 0,
-                  borderColor: isEvSession ? theme.evGreenBorder : "transparent",
+                  backgroundColor: isCompleted
+                    ? theme.pillInactiveBg
+                    : theme.pillActiveBg,
+                  borderWidth: 1,
+                  borderColor: theme.border,
                 },
               ]}
             >

@@ -249,7 +249,7 @@ export default function RecentParkingsScreen() {
                 styles.card,
                 {
                   backgroundColor: theme.surface,
-                  borderColor: isEvSession ? theme.evGreenBorder : theme.border,
+                  borderColor: theme.border,
                   shadowColor: theme.cardShadow,
                 },
               ]}
@@ -324,8 +324,8 @@ export default function RecentParkingsScreen() {
                       style={[
                         styles.tagPill,
                         {
-                          backgroundColor: isEvSession ? theme.evGreenSoft : theme.background,
-                          borderColor: isEvSession ? theme.evGreenBorder : theme.border,
+                          backgroundColor: theme.surfaceMuted,
+                          borderColor: theme.border,
                         },
                       ]}
                     >
@@ -337,9 +337,9 @@ export default function RecentParkingsScreen() {
                       <Text style={[styles.tagText, { color: theme.textSecondary }]}>{item.plate}</Text>
                     </View>
                     {Boolean(item.violationFine) && (
-                      <View style={[styles.tagPill, { backgroundColor: "rgba(239, 68, 68, 0.12)", borderColor: "#EF4444" }]}>
-                        <Ionicons name="warning-outline" size={11} color="#EF4444" />
-                        <Text style={[styles.tagText, { color: "#EF4444", fontWeight: "500" }]}>
+                      <View style={[styles.tagPill, { backgroundColor: theme.surfaceMuted, borderColor: theme.border }]}>
+                        <Ionicons name="warning-outline" size={11} color={theme.textSecondary} />
+                        <Text style={[styles.tagText, { color: theme.textSecondary, fontWeight: "500" }]}>
                           +{item.violationFine?.toLocaleString()} RWF Fine
                         </Text>
                       </View>

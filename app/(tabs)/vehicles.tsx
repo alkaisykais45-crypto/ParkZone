@@ -181,7 +181,7 @@ const Vehicles = () => {
         switch (type) {
             case "ev":
                 return (
-                    <View style={[styles.badge, { backgroundColor: theme.evGreenSoft, borderColor: theme.evGreenBorder, borderWidth: 1 }]}>
+                    <View style={[styles.badge, { backgroundColor: theme.surfaceMuted, borderColor: theme.border, borderWidth: 1 }]}>
                         <Text style={[styles.badgeTextEV, { color: theme.evGreen }]}>EV / ELECTRIC</Text>
                     </View>
                 );

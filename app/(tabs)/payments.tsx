@@ -24,7 +24,6 @@ import {
   fetchUserPaymentMethods,
   fetchUserVehicles,
   fetchWalletBalance,
-  resolveSpaceImageUrl,
   updateWalletBalance,
 } from "../services/parking";
 import { initiateMobilePayment } from "../services/mobilePayment";
@@ -90,10 +89,7 @@ const Payments = () => {
             const fineImage =
               sp?.image_url?.trim() ||
               loc?.image_url?.trim() ||
-              resolveSpaceImageUrl(
-                `${loc?.id || loc?.name || "fine"}-${sp?.space_number || f.id}`,
-                sp?.space_type || "regular"
-              );
+              undefined;
 
             mergedList.unshift({
               id: f.id,

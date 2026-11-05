@@ -156,7 +156,7 @@ export default function ParkingPaymentQrModal({
           <View
             style={[
               styles.statusBadge,
-              { backgroundColor: theme.evGreenSoft, borderColor: theme.evGreenBorder },
+              { backgroundColor: theme.surfaceMuted, borderColor: theme.border },
             ]}
           >
             <Ionicons name="shield-checkmark" size={14} color={theme.evGreen} />

@@ -23,11 +23,16 @@ export const ensureUserProfile = async (
     const normalizedPhone = normalizeRwandanPhone(rawPhone) || rawPhone.trim() || null;
     const cleanName =
         (extra?.fullName || (user.user_metadata?.full_name as string | undefined) || "").trim() || null;
+    const cleanAvatar =
+        (user.user_metadata?.avatar_url ||
+         user.user_metadata?.picture ||
+         (user.user_metadata as any)?.avatar ||
+         "").trim() || null;
 
     try {
         const { data: existing } = await supabase
             .from("profiles")
-            .select("id, email, phone_number, full_name")
+            .select("id, email, phone_number, full_name, avatar_url")
             .eq("id", user.id)
             .maybeSingle();
 
@@ -44,6 +49,9 @@ export const ensureUserProfile = async (
             if (!existing.full_name && cleanName) {
                 updates.full_name = cleanName;
             }
+            if (!existing.avatar_url && cleanAvatar) {
+                updates.avatar_url = cleanAvatar;
+            }
             if (Object.keys(updates).length > 0) {
                 updates.updated_at = new Date().toISOString();
                 await supabase.from("profiles").update(updates).eq("id", user.id);
@@ -58,6 +66,7 @@ export const ensureUserProfile = async (
             phone_number: normalizedPhone,
             phone_hash: normalizedPhone ? sha256(normalizedPhone) : null,
             full_name: cleanName,
+            avatar_url: cleanAvatar,
             role: "driver",
         };
 
@@ -73,6 +82,7 @@ export const ensureUserProfile = async (
                         email: cleanEmail,
                         phone_number: normalizedPhone,
                         full_name: cleanName,
+                        avatar_url: cleanAvatar,
                     },
                     { onConflict: "id" }
                 );

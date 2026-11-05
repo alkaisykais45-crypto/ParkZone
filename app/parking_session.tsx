@@ -19,7 +19,7 @@ import Svg, { Circle, Defs, LinearGradient, Stop } from "react-native-svg";
 import { router, useLocalSearchParams } from "expo-router";
 import { useTheme } from "../hooks/useTheme";
 import { supabase } from "./lib/supabase";
-import { completeParkingSession, fetchActiveParkingTicket, resolveSpaceImageUrl } from "./services/parking";
+import { completeParkingSession, fetchActiveParkingTicket } from "./services/parking";
 import { initiateMobilePayment } from "./services/mobilePayment";
 import { VoiceGuidance } from "./services/voiceGuidance";
 import ParkingPaymentQrModal from "../components/ParkingPaymentQrModal";
@@ -68,8 +68,7 @@ export default function ParkingSessionScreen() {
       id: (params.id as string) || "",
       locationId: (params.locationId as string) || undefined,
       imageUrl:
-        (params.image as string) ||
-        resolveSpaceImageUrl(`${params.name || "lot"}-${params.bayNumber || "bay"}`, "regular"),
+        (params.image as string) || (params.imageUrl as string) || undefined,
       name: (params.name as string) || "Parking Facility",
       address: (params.address as string) || "",
       bayNumber: (params.bayNumber as string) || "-",
@@ -155,10 +154,7 @@ export default function ParkingSessionScreen() {
           imageUrl:
             sp?.image_url?.trim() ||
             loc?.image_url?.trim() ||
-            resolveSpaceImageUrl(
-              `${resolvedLocId || loc?.name || "lot"}-${sp?.space_number || ticketRow.id}`,
-              sp?.space_type || "regular"
-            ),
+            undefined,
           name: loc?.name || prev.name,
           address: loc?.address || prev.address,
           bayNumber: sp?.space_number || prev.bayNumber,

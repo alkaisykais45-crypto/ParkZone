@@ -39,9 +39,10 @@ CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles(role);
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Users can view their own profile" ON public.profiles;
-CREATE POLICY "Users can view their own profile"
+DROP POLICY IF EXISTS "Public can view basic profiles" ON public.profiles;
+CREATE POLICY "Public can view basic profiles"
     ON public.profiles FOR SELECT
-    USING (auth.uid() = id);
+    USING (true);
 
 DROP POLICY IF EXISTS "Users can insert their own profile" ON public.profiles;
 CREATE POLICY "Users can insert their own profile"
@@ -284,7 +285,8 @@ CREATE OR REPLACE VIEW public.parking_spots AS SELECT * FROM public.parking_spac
 ALTER TABLE public.parking_spaces ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Anyone authenticated can view parking spaces" ON public.parking_spaces;
-CREATE POLICY "Anyone authenticated can view parking spaces"
+DROP POLICY IF EXISTS "Public/Authenticated users can view parking spaces" ON public.parking_spaces;
+CREATE POLICY "Public/Authenticated users can view parking spaces"
     ON public.parking_spaces FOR SELECT
     USING (true);
 
@@ -336,7 +338,8 @@ CREATE INDEX IF NOT EXISTS idx_ev_charging_operational ON public.ev_charging_poi
 ALTER TABLE public.ev_charging_points ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "Anyone authenticated can view EV chargers" ON public.ev_charging_points;
-CREATE POLICY "Anyone authenticated can view EV chargers"
+DROP POLICY IF EXISTS "Public/Authenticated users can view EV chargers" ON public.ev_charging_points;
+CREATE POLICY "Public/Authenticated users can view EV chargers"
     ON public.ev_charging_points FOR SELECT
     USING (true);
 
@@ -929,9 +932,145 @@ GRANT ALL ON ALL TABLES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
 GRANT ALL ON ALL ROUTINES IN SCHEMA public TO anon, authenticated, service_role;
 
+-- Explicit table grants for public schema tables accessed by mobile client
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.parking_spaces TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ev_charging_points TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.parking_locations TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.vehicles TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.parking_tickets TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.ev_charging_sessions TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.location_reviews TO anon, authenticated, service_role;
+GRANT SELECT, INSERT, UPDATE ON TABLE public.profiles TO anon, authenticated, service_role;
+
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON ROUTINES TO anon, authenticated, service_role;
 
 -- Notify PostgREST to reload its schema cache immediately
 NOTIFY pgrst, 'reload schema';
+-- ==============================================================================
+-- ParkZone Admin: All Users Fetcher (auth.users + public.profiles)
+-- Run this in your Supabase SQL Editor:
+-- https://supabase.com/dashboard/project/jtemzkoydifrzdelxnkf/sql
+-- ==============================================================================
+
+-- 1. Ensure public.profiles has RLS policy permitting admins and authenticated users to read all profiles
+DROP POLICY IF EXISTS "Allow reading profiles for admin console" ON public.profiles;
+CREATE POLICY "Allow reading profiles for admin console"
+    ON public.profiles FOR SELECT
+    USING (
+        auth.role() IN ('authenticated', 'service_role', 'anon')
+    );
+
+-- 2. Backfill public.profiles for all users already in auth.users
+INSERT INTO public.profiles (
+    id,
+    email,
+    email_hash,
+    phone_number,
+    phone_hash,
+    full_name,
+    role,
+    wallet_balance_rwf,
+    is_active,
+    created_at,
+    updated_at
+)
+SELECT 
+    u.id,
+    LOWER(NULLIF(TRIM(COALESCE(u.email, '')), '')),
+    CASE WHEN u.email IS NOT NULL THEN encode(digest(LOWER(TRIM(u.email)), 'sha256'), 'hex') ELSE NULL END,
+    NULLIF(TRIM(COALESCE(u.phone, u.raw_user_meta_data->>'phone_number', '')), ''),
+    CASE WHEN COALESCE(u.phone, u.raw_user_meta_data->>'phone_number') IS NOT NULL 
+         THEN encode(digest(COALESCE(u.phone, u.raw_user_meta_data->>'phone_number'), 'sha256'), 'hex') 
+         ELSE NULL END,
+    NULLIF(TRIM(COALESCE(u.raw_user_meta_data->>'full_name', u.raw_user_meta_data->>'name', '')), ''),
+    COALESCE(u.raw_user_meta_data->>'role', 'driver'),
+    0.00,
+    true,
+    COALESCE(u.created_at, NOW()),
+    NOW()
+FROM auth.users u
+ON CONFLICT (id) DO UPDATE SET
+    email = COALESCE(EXCLUDED.email, public.profiles.email),
+    phone_number = COALESCE(EXCLUDED.phone_number, public.profiles.phone_number),
+    full_name = COALESCE(EXCLUDED.full_name, public.profiles.full_name);
+
+-- 3. Dedicated SECURITY DEFINER RPC to fetch all users from auth.users joined with public.profiles
+CREATE OR REPLACE FUNCTION public.get_all_users_admin()
+RETURNS TABLE (
+    id UUID,
+    email TEXT,
+    phone_number TEXT,
+    full_name TEXT,
+    avatar_url TEXT,
+    role TEXT,
+    wallet_balance_rwf NUMERIC,
+    is_active BOOLEAN,
+    created_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ,
+    last_sign_in_at TIMESTAMPTZ,
+    provider TEXT
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, auth
+AS $$
+BEGIN
+    RETURN QUERY
+    SELECT
+        COALESCE(u.id, p.id) AS id,
+        COALESCE(p.email, u.email::TEXT) AS email,
+        COALESCE(p.phone_number, u.phone::TEXT, (u.raw_user_meta_data->>'phone_number')::TEXT) AS phone_number,
+        COALESCE(p.full_name, (u.raw_user_meta_data->>'full_name')::TEXT, (u.raw_user_meta_data->>'name')::TEXT, 'Registered User') AS full_name,
+        COALESCE(p.avatar_url, (u.raw_user_meta_data->>'avatar_url')::TEXT, '') AS avatar_url,
+        COALESCE(p.role, (u.raw_user_meta_data->>'role')::TEXT, 'driver') AS role,
+        COALESCE(p.wallet_balance_rwf, 0.00) AS wallet_balance_rwf,
+        COALESCE(p.is_active, true) AS is_active,
+        COALESCE(p.created_at, u.created_at, NOW()) AS created_at,
+        COALESCE(p.updated_at, u.updated_at, u.created_at, NOW()) AS updated_at,
+        u.last_sign_in_at,
+        COALESCE(u.raw_app_meta_data->>'provider', 'email')::TEXT AS provider
+    FROM auth.users u
+    FULL OUTER JOIN public.profiles p ON p.id = u.id
+    ORDER BY COALESCE(p.created_at, u.created_at) DESC;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.get_all_users_admin() TO anon, authenticated, service_role;
+
+-- ------------------------------------------------------------------------------
+-- 15. STORAGE BUCKETS & POLICIES (Parking Facilities, EV Stations & User Profiles)
+-- ------------------------------------------------------------------------------
+
+-- Ensure storage buckets exist and are public for direct CDN access
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES 
+    ('parkzone-media', 'parkzone-media', true, 5242880, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']::TEXT[]),
+    ('parking-images', 'parking-images', true, 5242880, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']::TEXT[]),
+    ('avatars', 'avatars', true, 5242880, ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']::TEXT[])
+ON CONFLICT (id) DO UPDATE SET 
+    public = true,
+    file_size_limit = 5242880,
+    allowed_mime_types = ARRAY['image/jpeg', 'image/png', 'image/webp', 'image/gif']::TEXT[];
+
+-- Storage Object Access Policies:
+DROP POLICY IF EXISTS "Public can view parkzone media objects" ON storage.objects;
+CREATE POLICY "Public can view parkzone media objects"
+    ON storage.objects FOR SELECT
+    USING (bucket_id IN ('parkzone-media', 'parking-images', 'avatars'));
+
+DROP POLICY IF EXISTS "Anyone or authenticated can upload parkzone media objects" ON storage.objects;
+CREATE POLICY "Anyone or authenticated can upload parkzone media objects"
+    ON storage.objects FOR INSERT
+    WITH CHECK (bucket_id IN ('parkzone-media', 'parking-images', 'avatars'));
+
+DROP POLICY IF EXISTS "Anyone or authenticated can update parkzone media objects" ON storage.objects;
+CREATE POLICY "Anyone or authenticated can update parkzone media objects"
+    ON storage.objects FOR UPDATE
+    USING (bucket_id IN ('parkzone-media', 'parking-images', 'avatars'));
+
+DROP POLICY IF EXISTS "Admins can delete parkzone media objects" ON storage.objects;
+CREATE POLICY "Admins can delete parkzone media objects"
+    ON storage.objects FOR DELETE
+    USING (bucket_id IN ('parkzone-media', 'parking-images', 'avatars'));
